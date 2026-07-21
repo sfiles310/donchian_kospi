@@ -1,0 +1,12 @@
+# 비밀값 - 절대 커밋 금지
+# (주의: .gitignore는 인라인 주석을 지원하지 않는다. 주석은 반드시 별도 줄에)
+# run_donchian.bat 에는 Supabase service_role 키가 들어간다
+run_donchian.bat
+.env
+
+# 실행 산출물 (로그에 봇 토큰이 찍힐 수 있음)
+output/
+*.log
+
+__pycache__/
+*.pyc

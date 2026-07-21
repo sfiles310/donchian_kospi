@@ -1,0 +1,6 @@
+# KOSPI Donchian 20 Daily Signal — 의존 라이브러리
+pandas>=2.0.0
+numpy>=1.24.0
+requests>=2.31.0
+pykrx>=1.0.45
+finance-datareader>=0.9.50

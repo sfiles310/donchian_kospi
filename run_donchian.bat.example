@@ -1,0 +1,14 @@
+@echo off
+chcp 65001 > nul
+REM ─────────────────────────────────────────────────────────────
+REM KOSPI Donchian 20 Daily Signal — 로컬 실행 배치 (템플릿)
+REM 이 파일을 run_donchian.bat 으로 복사한 뒤 값을 채우세요.
+REM run_donchian.bat 은 .gitignore 로 제외되어 커밋되지 않습니다.
+REM ─────────────────────────────────────────────────────────────
+
+cd /d "%~dp0"
+set "SUPABASE_URL=<본인 Supabase URL>"
+set "SUPABASE_SERVICE_KEY=<service_role 키>"
+python donchian_kospi_daily.py >> output\cron.log 2>&1
+echo [%date% %time%] Exit code: %errorlevel% >> output\cron.log
+exit /b %errorlevel%

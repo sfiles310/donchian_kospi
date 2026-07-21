@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>KOSPI Donchian 20 Signal Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  :root {
+    --bg-main: #0f0f1a;
+    --bg-card: #1a1a2e;
+    --bg-soft: #14142a;
+    --border: #2d2d52;
+    --text-1: #eaeaf5;
+    --text-2: #9999bb;
+    --text-3: #6b6b8a;
+    --green: #00d28d;
+    --red:   #ff5577;
+    --blue:  #4d8cff;
+    --amber: #ffaa33;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    background: var(--bg-main);
+    color: var(--text-1);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+    min-height: 100vh;
+  }
+  .container { max-width: 1100px; margin: 0 auto; }
+  h1 {
+    font-size: 18px; font-weight: 500;
+    margin: 0 0 4px; letter-spacing: 0.02em;
+  }
+  .updated { color: var(--text-3); font-size: 12px; margin-bottom: 24px; }
+  .signal-banner {
+    border-radius: 14px; padding: 22px 26px; margin-bottom: 20px;
+    display: flex; align-items: center; gap: 16px;
+    border: 1px solid;
+  }
+  .signal-buy  { background: rgba(0,210,141,0.08); border-color: rgba(0,210,141,0.3); }
+  .signal-sell { background: rgba(255,85,119,0.08); border-color: rgba(255,85,119,0.3); }
+  .signal-hold { background: rgba(77,140,255,0.06); border-color: rgba(77,140,255,0.25); }
+  .signal-icon { font-size: 36px; line-height: 1; }
+  .signal-icon.buy  { color: var(--green); }
+  .signal-icon.sell { color: var(--red); }
+  .signal-icon.hold { color: var(--blue); }
+  .signal-title { font-size: 20px; font-weight: 500; margin-bottom: 4px; }
+  .signal-sub   { font-size: 13px; color: var(--text-2); }
+  .verify-box {
+    background: var(--bg-soft);
+    border-left: 3px solid var(--blue);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-bottom: 20px;
+    font-size: 13px;
+    line-height: 1.9;
+  }
+  .verify-box strong { color: var(--text-1); font-weight: 500; }
+  .verify-box code {
+    font-family: 'JetBrains Mono', Monaco, monospace;
+    background: rgba(255,255,255,0.04);
+    color: var(--text-1);
+    padding: 2px 7px; border-radius: 4px; font-size: 12px;
+  }
+  .pass { color: var(--green); font-weight: 500; }
+  .fail { color: var(--red); font-weight: 500; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .card-label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+  .card-value { font-size: 22px; font-weight: 500; color: var(--text-1); }
+  .card-sub   { font-size: 11px; color: var(--text-2); margin-top: 4px; }
+  .green { color: var(--green); }
+  .red   { color: var(--red); }
+  .section-title {
+    font-size: 12px; color: var(--text-3); text-transform: uppercase;
+    letter-spacing: 0.1em; margin: 24px 0 10px;
+  }
+  .chart-wrap {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px;
+    height: 360px;
+    position: relative;
+  }
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 18px;
+    font-size: 12px; color: var(--text-2); margin-bottom: 12px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 12px; color: var(--text-3); font-weight: 400;
+       border-bottom: 1px solid var(--border); text-transform: uppercase; font-size: 11px; letter-spacing: 0.06em; }
+  td { padding: 12px; border-bottom: 1px solid var(--border); }
+  .badge { display: inline-block; font-size: 11px; font-weight: 500; padding: 3px 10px; border-radius: 99px; }
+  .badge-buy  { background: rgba(0,210,141,0.15); color: var(--green); }
+  .badge-sell { background: rgba(255,85,119,0.15); color: var(--red); }
+  .footer { color: var(--text-3); font-size: 11px; margin-top: 32px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>KOSPI Donchian 20 Channel — Daily Signal</h1>
+  <div class="updated" id="updated">—</div>
+
+  <div id="signal-banner" class="signal-banner signal-hold">
+    <span class="signal-icon hold" id="signal-icon">●</span>
+    <div>
+      <div class="signal-title" id="signal-title">로딩 중...</div>
+      <div class="signal-sub" id="signal-sub"></div>
+    </div>
+  </div>
+
+  <div class="verify-box">
+    <strong>오늘 신호 검증</strong><br>
+    매수 조건: <code id="v-buy">—</code> <span id="v-buy-result"></span><br>
+    매도 조건: <code id="v-sell">—</code> <span id="v-sell-result"></span>
+  </div>
+
+  <div class="grid">
+    <div class="card"><div class="card-label">기준일</div><div class="card-value" id="m-date" style="font-size:16px;">—</div></div>
+    <div class="card"><div class="card-label">코스피 종가</div><div class="card-value" id="m-close">—</div></div>
+    <div class="card"><div class="card-label">20일 상단 (매수선)</div><div class="card-value green" id="m-dchigh">—</div><div class="card-sub" id="m-gap-buy"></div></div>
+    <div class="card"><div class="card-label">20일 하단 (매도선)</div><div class="card-value red" id="m-dclow">—</div><div class="card-sub" id="m-gap-sell"></div></div>
+  </div>
+
+  <div class="section-title">최근 60일 차트</div>
+  <div class="legend">
+    <span class="legend-item"><span style="width:14px; height:2px; background:var(--blue);"></span>코스피 종가</span>
+    <span class="legend-item"><span style="width:14px; border-top:2px dashed var(--green);"></span>20일 상단 (매수선)</span>
+    <span class="legend-item"><span style="width:14px; border-top:2px dashed var(--red);"></span>20일 하단 (매도선)</span>
+    <span class="legend-item"><span style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:8px solid var(--green);"></span>매수 진입</span>
+    <span class="legend-item"><span style="width:8px;height:8px;background:var(--red);transform:rotate(45deg);"></span>매도 청산</span>
+  </div>
+  <div class="chart-wrap"><canvas id="mainChart"></canvas></div>
+
+  <div class="section-title">최근 매매 신호 이력</div>
+  <div class="card" style="padding: 0;">
+    <table>
+      <thead><tr><th>날짜</th><th>신호</th><th>코스피 종가</th><th>행동</th></tr></thead>
+      <tbody id="signals-body"></tbody>
+    </table>
+  </div>
+
+  <div class="footer">자동 갱신 — 매일 장 마감 후 실행됨 · 데이터: pykrx (KRX 공식)</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+const RAW = __PAYLOAD__;
+const S = RAW.summary, CHART = RAW.chart, SIGNALS = RAW.signals;
+const fmt = n => Number(n).toLocaleString('ko-KR', {maximumFractionDigits: 2});
+
+document.getElementById('updated').textContent = `최종 갱신: ${S.updated_at}`;
+document.getElementById('m-date').textContent  = S.last_date;
+document.getElementById('m-close').textContent = fmt(S.close);
+document.getElementById('m-dchigh').textContent = fmt(S.dc_high20);
+document.getElementById('m-dclow').textContent  = fmt(S.dc_low20);
+
+const gapBuy  = (S.dc_high20 - S.close) / S.close * 100;
+const gapSell = (S.close - S.dc_low20) / S.close * 100;
+document.getElementById('m-gap-buy').textContent =
+  gapBuy > 0 ? `매수선까지 +${gapBuy.toFixed(2)}%` : `매수선 위 ${Math.abs(gapBuy).toFixed(2)}%`;
+document.getElementById('m-gap-sell').textContent = `매도선까지 ${gapSell.toFixed(2)}% 여유`;
+
+document.getElementById('v-buy').textContent  = `당일 고가 ${fmt(S.high)} > 20일 상단 ${fmt(S.dc_high20)}`;
+document.getElementById('v-sell').textContent = `당일 저가 ${fmt(S.low)} < 20일 하단 ${fmt(S.dc_low20)}`;
+document.getElementById('v-buy-result').innerHTML  = S.buy_signal
+  ? '<span class="pass">→ TRUE</span>' : '<span class="fail">→ FALSE</span>';
+document.getElementById('v-sell-result').innerHTML = S.sell_signal
+  ? '<span class="fail">→ TRUE</span>' : '<span class="pass">→ FALSE</span>';
+
+const banner = document.getElementById('signal-banner');
+const icon   = document.getElementById('signal-icon');
+const title  = document.getElementById('signal-title');
+const sub    = document.getElementById('signal-sub');
+
+if (S.current_position === 1 && S.sell_signal) {
+  banner.className = 'signal-banner signal-sell';
+  icon.className = 'signal-icon sell'; icon.textContent = '▼';
+  title.textContent = '매도 신호 — 다음 거래일 ACE 200 TR 매도';
+  sub.textContent = `당일 저가(${fmt(S.low)})가 20일 하단(${fmt(S.dc_low20)})을 이탈`;
+} else if (S.current_position === 0 && S.buy_signal) {
+  banner.className = 'signal-banner signal-buy';
+  icon.className = 'signal-icon buy'; icon.textContent = '▲';
+  title.textContent = '매수 신호 — 다음 거래일 ACE 200 TR 매수';
+  sub.textContent = `당일 고가(${fmt(S.high)})가 20일 상단(${fmt(S.dc_high20)})을 돌파`;
+} else if (S.current_position === 1) {
+  title.textContent = '보유 유지 — 추가 행동 없음';
+  sub.textContent = `현재 ACE 200 TR 보유 중. 매도선까지 ${gapSell.toFixed(2)}% 여유`;
+} else {
+  icon.textContent = '○';
+  title.textContent = '현금 대기';
+  sub.textContent = `매수선까지 ${gapBuy.toFixed(2)}% 남음`;
+}
+
+new Chart(document.getElementById('mainChart'), {
+  type: 'line',
+  data: {
+    labels: CHART.map(d => d.date.slice(5)),
+    datasets: [
+      { label: '코스피 종가', data: CHART.map(d => d.close),
+        borderColor: '#4d8cff', borderWidth: 2, pointRadius: 0, tension: 0.2, fill: false },
+      { label: '20일 상단', data: CHART.map(d => d.dc_high),
+        borderColor: '#00d28d', borderWidth: 1.5, borderDash: [5,3], pointRadius: 0, fill: false },
+      { label: '20일 하단', data: CHART.map(d => d.dc_low),
+        borderColor: '#ff5577', borderWidth: 1.5, borderDash: [5,3], pointRadius: 0, fill: false },
+      { label: '매수 조건 충족', data: CHART.map(d => (d.position===1 && d.entry) ? d.close : null),
+        backgroundColor: '#00d28d', borderColor: 'transparent', pointRadius: 8, pointStyle: 'triangle', showLine: false },
+      { label: '매도 조건 충족', data: CHART.map(d => (d.position===0 && d.exit_sig) ? d.close : null),
+        backgroundColor: '#ff5577', borderColor: 'transparent', pointRadius: 8, pointStyle: 'rectRot', showLine: false },
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } },
+    scales: {
+      x: { ticks: { maxTicksLimit: 12, color: '#9999bb' }, grid: { color: 'rgba(255,255,255,0.04)' } },
+      y: { ticks: { color: '#9999bb', callback: v => v.toLocaleString('ko-KR') }, grid: { color: 'rgba(255,255,255,0.04)' } }
+    }
+  }
+});
+
+const tbody = document.getElementById('signals-body');
+if (SIGNALS.length === 0) {
+  tbody.innerHTML = '<tr><td colspan="4" style="color:var(--text-3); text-align:center; padding:24px;">최근 신호 없음</td></tr>';
+} else {
+  [...SIGNALS].reverse().forEach(s => {
+    const isBuy = s.type === 'BUY';
+    tbody.innerHTML += `<tr>
+      <td>${s.date}</td>
+      <td><span class="badge ${isBuy ? 'badge-buy' : 'badge-sell'}">${isBuy ? '▲ 매수' : '▼ 매도'}</span></td>
+      <td>${fmt(s.price)}</td>
+      <td style="color:var(--text-2)">${isBuy ? '다음 거래일 ACE 200 TR 매수' : '다음 거래일 ACE 200 TR 매도'}</td>
+    </tr>`;
+  });
+}
+</script>
+</body>
+</html>
