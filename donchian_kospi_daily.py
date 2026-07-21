@@ -60,6 +60,9 @@ CONFIG = {
     # 전략 검증 추적 시작일 = 미실행한 매도 신호일.
     # 이 날 이후 '신호대로 실행' vs '미실행 보유'를 매일 비교한다.
     'TRACK_FROM': '2026-07-03',
+
+    # 대시보드 주소 (알림 하단 링크)
+    'PAGES_URL': 'https://sfiles310.github.io/donchian_kospi/',
 }
 
 # ─────────────────────────────────────────────────────────────────
@@ -396,13 +399,15 @@ def _fmt_tracking(rows: list, ndays: int = None) -> str:
 
 
 def _fmt_holdings(prices: dict) -> str:
-    lines = []
+    """종목명은 표시폭으로 좌측 정렬, 가격은 우측 정렬해 세로줄을 맞춘다."""
+    names = [n for _, n in CONFIG['MANAGED']]
+    w = max(_dwidth(n) for n in names) + 2
+    lines = ["```"]
     for code, name in CONFIG['MANAGED']:
         p = prices.get(code)
-        if p:
-            lines.append(f" · {name} `{p[0]:,.0f}` ({p[1]:+.2f}%)")
-        else:
-            lines.append(f" · {name} (가격 조회 실패)")
+        val = f"{p[0]:>9,.0f}" if p else "     조회실패"
+        lines.append(_dpad(name, w) + val)
+    lines.append("```")
     return "\n".join(lines)
 
 
@@ -427,50 +432,53 @@ def build_message(d: pd.DataFrame, signal_today: str, prices: dict = None) -> st
     last_chg = since[-1] if len(since) else d.index[0]
     ndays = int((d.index > last_chg).sum())
 
-    # ── 머리말: 조건 충족 여부가 기준 ──────────────────────────
+    md = d.index[-1].strftime('%m/%d')
+
+    # ── 머리말: 오늘 할 행동 ──────────────────────────────────
     if exit_hit:
-        head = ("[매도 조건 충족]\n\n"
-                f"저가 `{low:,.2f}` < 20일 하단 `{dcl:,.2f}`\n"
-                "다음 거래일 시가 매도 대상:\n" + _fmt_holdings(prices))
+        head = (f"*[매도 조건 충족]* {md}\n"
+                f"저가 {low:,.0f} < 20일 하단 {dcl:,.0f}\n\n"
+                "다음 거래일 시가 매도\n" + _fmt_holdings(prices))
     elif entry_hit:
-        head = ("[매수 조건 충족]\n\n"
-                f"고가 `{high:,.2f}` > 20일 상단 `{dch:,.2f}`\n"
-                "다음 거래일 시가 매수 대상:\n" + _fmt_holdings(prices))
+        head = (f"*[매수 조건 충족]* {md}\n"
+                f"고가 {high:,.0f} > 20일 상단 {dch:,.0f}\n\n"
+                "다음 거래일 시가 매수\n" + _fmt_holdings(prices))
     else:
-        head = ("[조건 미충족] 오늘은 매수·매도 조건 모두 해당 없음\n\n"
-                "보유 종목:\n" + _fmt_holdings(prices))
+        head = (f"*[조건 미충족]* {md}\n"
+                f"종가 {close:,.0f} · 상단 {dch:,.0f} / 하단 {dcl:,.0f}\n"
+                + _fmt_holdings(prices))
 
-    # ── 국면 (실제 보유가 아니라 전략상 상태임을 명시) ──────────
+    # ── 국면 + 재진입선 ──────────────────────────────────────
     state = "보유" if pos == 1 else "현금"
-    phase = (f"\n\n_전략 국면_ (실제 보유와 무관)\n"
-             f"현재 국면: *{state}* · {last_chg.strftime('%Y-%m-%d')} 전환 후 {ndays}거래일째")
+    # %-m/%-d 는 리눅스 전용이라 Windows에서 죽는다. 직접 조립한다.
+    body = f"\n국면: {state} ({last_chg.month}/{last_chg.day} 이후 {ndays}거래일째)"
     if signal_today:
-        phase += f"\n오늘 국면 전환 발생: *{signal_today}*"
-
-    # ── 조건 검증 ────────────────────────────────────────────
-    detail = (f"\n\n_조건 검증_ (기준일 `{date_str}`, 종가 `{close:,.2f}`)\n"
-              f"매수: 고가 {high:,.2f} > 상단 {dch:,.2f} → {'TRUE' if entry_hit else 'FALSE'}\n"
-              f"매도: 저가 {low:,.2f} < 하단 {dcl:,.2f} → {'TRUE' if exit_hit else 'FALSE'}")
-
-    # ── 재진입선 + 횡보 시 하락 경로 ──────────────────────────
-    proj = ""
+        body += f"\n오늘 국면 전환: *{signal_today}*"
     if pos == 0:
-        proj = f"\n\n_재진입선_ `{dch:,.2f}` (현재가 {(dch/close-1)*100:+.1f}%)\n"
-        proj += "횡보 시 하락 예상:\n"
-        for k, eta, lvl, gap in project_dc_high(d):
-            proj += f"  {k:2d}거래일 뒤({eta})  `{lvl:,.0f}`  {gap:+.1f}%\n"
-        proj = proj.rstrip()
+        path = project_dc_high(d, steps=(20,))
+        _, eta, lvl, _g = path[0]
+        body += (f"\n재진입선 {dch:,.0f} ({(dch/close-1)*100:+.1f}%)"
+                 f"\n  → 횡보 시 {eta}경 {lvl:,.0f}")
 
-    # ── 참고 종목 ────────────────────────────────────────────
+    # ── 미실행 비용 한 줄 ────────────────────────────────────
+    track = ""
+    rows = track_scenarios(d)
+    if rows:
+        avg_h = sum(r['hold'] for r in rows) / len(rows)
+        avg_s = sum(r['strat'] for r in rows) / len(rows)
+        gap = avg_h - avg_s
+        track = (f"\n\n미실행 비용 {gap:+.1f}%"
+                 f" (100만원당 {-abs(gap)*10000:,.0f}원)")
+
+    # ── 참고 종목 (한 줄) ────────────────────────────────────
     ref = ""
-    if CONFIG['REFERENCE']:
-        ref = "\n\n─────────────\n_지수신호 미적용_"
-        for code, name, note in CONFIG['REFERENCE']:
-            p = prices.get(code)
-            px = f"`{p[0]:,.0f}` ({p[1]:+.2f}%)" if p else "(조회 실패)"
-            ref += f"\n · {name} {px}\n   {note}"
+    for code, name, _note in CONFIG['REFERENCE']:
+        p = prices.get(code)
+        if p:
+            ref += f"\n[미적용] {name} {p[0]:,.0f}"
 
-    return head + phase + detail + proj + _fmt_tracking(track_scenarios(d), ndays) + ref
+    link = f"\n\n상세 ▸ {CONFIG['PAGES_URL']}"
+    return head + body + track + ref + link
 
 # ─────────────────────────────────────────────────────────────────
 # HTML 대시보드 생성
