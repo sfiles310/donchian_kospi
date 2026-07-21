@@ -56,6 +56,10 @@ CONFIG = {
     'REFERENCE': [
         ('0190C0', 'RISE 현대차그룹피지컬AI', '상관 0.71 · 재판정 2026-11'),
     ],
+
+    # 전략 검증 추적 시작일 = 미실행한 매도 신호일.
+    # 이 날 이후 '신호대로 실행' vs '미실행 보유'를 매일 비교한다.
+    'TRACK_FROM': '2026-07-03',
 }
 
 # ─────────────────────────────────────────────────────────────────
@@ -303,6 +307,71 @@ def project_dc_high(d: pd.DataFrame, n: int = 20, steps=(4, 8, 12, 16, 20)):
     return path
 
 
+def track_scenarios(d: pd.DataFrame) -> list:
+    """TRACK_FROM(미실행 매도 신호일) 이후 두 경로를 비교.
+
+      A. 신호 준수  — 지수 신호대로 매도/매수. 체결은 신호 다음 거래일 시가.
+      B. 미실행 보유 — 그날 팔지 않고 계속 보유.
+
+    상태 파일 없이 매일 가격에서 재계산하므로 실행이 빠진 날이 있어도 값이 어긋나지 않는다.
+    """
+    start = CONFIG['TRACK_FROM']
+    rows = []
+    for code, name in CONFIG['MANAGED']:
+        try:
+            import FinanceDataReader as fdr
+            e = fdr.DataReader(code, start)
+            e.columns = [c.lower() for c in e.columns]
+            e = e[['open', 'close']].astype(float).dropna()
+            if len(e) < 2:
+                continue
+
+            # 지수 신호를 ETF 날짜축에 정렬. 신호(종가) -> 다음 거래일 시가 체결이므로
+            # [시가(t-1) -> 시가(t)] 구간의 보유 여부는 종가(t-2) 시점 신호가 결정한다.
+            pos = d['position'].reindex(e.index, method='ffill').fillna(0)
+            held = pos.shift(2).fillna(0)
+
+            oo = e['open'].pct_change().fillna(0)
+            strat_eq = float((1 + oo * held).prod())
+
+            # 미실행: 체결 예정이던 시가(= 신호 다음 거래일 시가)부터 현재 종가까지 계속 보유
+            entry = float(e['open'].iloc[1])
+            hold_eq = float(e['close'].iloc[-1]) / entry
+
+            # 신호 준수 경로도 마지막 구간은 종가까지 반영
+            if held.iloc[-1] == 1:
+                strat_eq *= float(e['close'].iloc[-1]) / float(e['open'].iloc[-1])
+
+            rows.append({
+                'name': name,
+                'entry': entry,
+                'now': float(e['close'].iloc[-1]),
+                'strat': (strat_eq - 1) * 100,
+                'hold': (hold_eq - 1) * 100,
+                'gap': (hold_eq - strat_eq) * 100,
+            })
+        except Exception as ex:
+            log.warning(f"{name}({code}) 추적 계산 실패: {ex}")
+    return rows
+
+
+def _fmt_tracking(rows: list) -> str:
+    if not rows:
+        return ""
+    out = (f"\n\n─────────────\n_전략 검증_ ({CONFIG['TRACK_FROM']} 매도 신호 기준)\n"
+           "종목별 · 신호준수 vs 미실행보유\n")
+    for r in rows:
+        out += (f" · {r['name']}\n"
+                f"   신호준수 `{r['strat']:+.1f}%` / 미실행 `{r['hold']:+.1f}%`"
+                f"  → 차이 `{r['gap']:+.1f}%p`\n")
+    avg_s = sum(r['strat'] for r in rows) / len(rows)
+    avg_h = sum(r['hold'] for r in rows) / len(rows)
+    out += (f"평균: 신호준수 `{avg_s:+.1f}%` / 미실행 `{avg_h:+.1f}%`\n"
+            f"미실행 비용: `{avg_h - avg_s:+.1f}%p`\n"
+            f"※ '미실행'이 지금 매도할 때 확정되는 값입니다.")
+    return out
+
+
 def _fmt_holdings(prices: dict) -> str:
     lines = []
     for code, name in CONFIG['MANAGED']:
@@ -378,7 +447,7 @@ def build_message(d: pd.DataFrame, signal_today: str, prices: dict = None) -> st
             px = f"`{p[0]:,.0f}` ({p[1]:+.2f}%)" if p else "(조회 실패)"
             ref += f"\n · {name} {px}\n   {note}"
 
-    return head + phase + detail + proj + ref
+    return head + phase + detail + proj + _fmt_tracking(track_scenarios(d)) + ref
 
 # ─────────────────────────────────────────────────────────────────
 # HTML 대시보드 생성
