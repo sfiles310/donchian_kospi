@@ -251,8 +251,26 @@ def publish_supabase(d: pd.DataFrame, signals: pd.DataFrame) -> bool:
 # ─────────────────────────────────────────────────────────────────
 # 텔레그램 푸시
 # ─────────────────────────────────────────────────────────────────
+def _redact(msg: str) -> str:
+    """예외 메시지에 담긴 봇 토큰을 가린다.
+
+    requests 예외는 실패한 URL을 통째로 담는데, 텔레그램 URL에는 토큰이 들어 있다.
+    그대로 로그에 남기면 로그 파일·CI 콘솔에 토큰이 평문으로 노출된다.
+    """
+    import re
+    msg = re.sub(r'bot\d{6,}:[A-Za-z0-9_-]{20,}', 'bot<REDACTED>', msg)
+    token = CONFIG['TELEGRAM_BOT_TOKEN']
+    if token:
+        msg = msg.replace(token, '<REDACTED>')
+    return msg
+
+
 def send_telegram(text: str) -> bool:
-    """텔레그램 메시지 발송"""
+    """텔레그램 메시지 발송. parse_mode는 HTML을 쓴다.
+
+    레거시 Markdown은 '[', '_', '*'가 본문에 섞이면 파싱에 실패해 400을 낸다.
+    HTML은 &, <, > 세 글자만 이스케이프하면 되므로 훨씬 덜 깨진다.
+    """
     token = CONFIG['TELEGRAM_BOT_TOKEN']
     chat_id = CONFIG['TELEGRAM_CHAT_ID']
 
@@ -264,16 +282,23 @@ def send_telegram(text: str) -> bool:
     payload = {
         'chat_id': chat_id,
         'text': text,
-        'parse_mode': 'Markdown',
+        'parse_mode': 'HTML',
         'disable_web_page_preview': True,
     }
     try:
         r = requests.post(url, json=payload, timeout=10)
-        r.raise_for_status()
+        if not r.ok:
+            # 텔레그램은 실패 사유를 본문 description에 담아준다
+            try:
+                desc = r.json().get('description', '')
+            except Exception:
+                desc = r.text[:200]
+            log.error(f"텔레그램 푸시 실패: HTTP {r.status_code} — {_redact(desc)}")
+            return False
         log.info("텔레그램 푸시 성공")
         return True
     except Exception as e:
-        log.error(f"텔레그램 푸시 실패: {e}")
+        log.error(f"텔레그램 푸시 실패: {_redact(str(e))}")
         return False
 
 # ─────────────────────────────────────────────────────────────────
@@ -400,14 +425,15 @@ def _fmt_tracking(rows: list, ndays: int = None) -> str:
 
 def _fmt_holdings(prices: dict) -> str:
     """종목명은 표시폭으로 좌측 정렬, 가격은 우측 정렬해 세로줄을 맞춘다."""
+    import html as _html
     names = [n for _, n in CONFIG['MANAGED']]
     w = max(_dwidth(n) for n in names) + 2
-    lines = ["```"]
+    lines = ["<pre>"]
     for code, name in CONFIG['MANAGED']:
         p = prices.get(code)
         val = f"{p[0]:>9,.0f}" if p else "     조회실패"
-        lines.append(_dpad(name, w) + val)
-    lines.append("```")
+        lines.append(_html.escape(_dpad(name, w) + val))
+    lines.append("</pre>")
     return "\n".join(lines)
 
 
@@ -436,15 +462,15 @@ def build_message(d: pd.DataFrame, signal_today: str, prices: dict = None) -> st
 
     # ── 머리말: 오늘 할 행동 ──────────────────────────────────
     if exit_hit:
-        head = (f"*[매도 조건 충족]* {md}\n"
-                f"저가 {low:,.0f} < 20일 하단 {dcl:,.0f}\n\n"
+        head = (f"<b>[매도 조건 충족] {md}</b>\n"
+                f"저가 {low:,.0f} &lt; 20일 하단 {dcl:,.0f}\n\n"
                 "다음 거래일 시가 매도\n" + _fmt_holdings(prices))
     elif entry_hit:
-        head = (f"*[매수 조건 충족]* {md}\n"
-                f"고가 {high:,.0f} > 20일 상단 {dch:,.0f}\n\n"
+        head = (f"<b>[매수 조건 충족] {md}</b>\n"
+                f"고가 {high:,.0f} &gt; 20일 상단 {dch:,.0f}\n\n"
                 "다음 거래일 시가 매수\n" + _fmt_holdings(prices))
     else:
-        head = (f"*[조건 미충족]* {md}\n"
+        head = (f"<b>[조건 미충족] {md}</b>\n"
                 f"종가 {close:,.0f} · 상단 {dch:,.0f} / 하단 {dcl:,.0f}\n"
                 + _fmt_holdings(prices))
 
@@ -453,7 +479,7 @@ def build_message(d: pd.DataFrame, signal_today: str, prices: dict = None) -> st
     # %-m/%-d 는 리눅스 전용이라 Windows에서 죽는다. 직접 조립한다.
     body = f"\n국면: {state} ({last_chg.month}/{last_chg.day} 이후 {ndays}거래일째)"
     if signal_today:
-        body += f"\n오늘 국면 전환: *{signal_today}*"
+        body += f"\n오늘 국면 전환: <b>{signal_today}</b>"
     if pos == 0:
         path = project_dc_high(d, steps=(20,))
         _, eta, lvl, _g = path[0]
@@ -586,7 +612,11 @@ def main():
         log.info(f"조건 충족일 — {'매수' if last['long_entry'] else '매도'} 조건 TRUE")
 
     if signal_today or cond_hit or CONFIG['NOTIFY_ALWAYS']:
-        send_telegram(msg)
+        ok = send_telegram(msg)
+        # 토큰/chat_id를 설정했는데도 전달이 실패했다면 CI를 빨간불로 만든다.
+        # 그러지 않으면 "초록불인데 알림은 안 옴" 상태를 알아챌 방법이 없다.
+        if not ok and CONFIG['TELEGRAM_BOT_TOKEN'] and CONFIG['TELEGRAM_CHAT_ID']:
+            raise RuntimeError("텔레그램 전달 실패 (위 로그의 사유 확인)")
     else:
         log.info("신호 변화 없음 → 텔레그램 푸시 생략 (NOTIFY_ALWAYS=False)")
 
@@ -599,5 +629,7 @@ if __name__ == '__main__':
     except Exception as e:
         log.exception(f"실행 중 오류: {e}")
         # 오류도 텔레그램으로 알림
-        send_telegram(f"[ERROR] *KOSPI 돈치안 스크립트 오류*\n\n```\n{e}\n```")
+        import html as _html
+        send_telegram("<b>[ERROR] KOSPI 돈치안 스크립트 오류</b>\n\n"
+                      f"<pre>{_html.escape(_redact(str(e)))}</pre>")
         sys.exit(1)
