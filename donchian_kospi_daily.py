@@ -57,9 +57,12 @@ CONFIG = {
         ('0190C0', 'RISE 현대차그룹피지컬AI', '상관 0.71 · 재판정 2026-11'),
     ],
 
-    # 전략 검증 추적 시작일 = 미실행한 매도 신호일.
-    # 이 날 이후 '신호대로 실행' vs '미실행 보유'를 매일 비교한다.
-    'TRACK_FROM': '2026-07-03',
+    # 전략 검증 기준일. 각 기준일마다 '신호대로 실행' vs '계속 보유'를 비교한다.
+    # 금액은 넣지 않는다 — 공개 저장소라 수량이 드러나면 자산 규모가 계산된다.
+    'TRACK': [
+        ('2026-07-03', '미실행'),   # 놓친 매도 신호. 이미 치른 비용
+        ('2026-07-21', '검증'),     # 이제부터 신호대로 할 경우의 검증
+    ],
 
     # 대시보드 주소 (알림 하단 링크)
     'PAGES_URL': 'https://sfiles310.github.io/donchian_kospi/',
@@ -335,15 +338,18 @@ def project_dc_high(d: pd.DataFrame, n: int = 20, steps=(4, 8, 12, 16, 20)):
     return path
 
 
-def track_scenarios(d: pd.DataFrame) -> list:
-    """TRACK_FROM(미실행 매도 신호일) 이후 두 경로를 비교.
+def track_scenarios(d: pd.DataFrame, start: str) -> list:
+    """기준일(start) 이후 두 경로를 비교.
 
       A. 신호 준수  — 지수 신호대로 매도/매수. 체결은 신호 다음 거래일 시가.
-      B. 미실행 보유 — 그날 팔지 않고 계속 보유.
+      B. 계속 보유  — 팔지 않고 그대로 들고 감.
 
-    상태 파일 없이 매일 가격에서 재계산하므로 실행이 빠진 날이 있어도 값이 어긋나지 않는다.
+    두 경로 모두 시장 가격만으로 계산된다. 실제 매매 여부와 무관하게 값이 나오고,
+    사용자는 자기가 어느 선 위에 있는지만 알면 된다.
+
+    상태 파일을 쓰지 않고 매일 가격에서 재계산하므로 실행이 빠진 날이 있어도
+    누적값이 어긋나지 않는다.
     """
-    start = CONFIG['TRACK_FROM']
     rows = []
     for code, name in CONFIG['MANAGED']:
         try:
@@ -486,15 +492,20 @@ def build_message(d: pd.DataFrame, signal_today: str, prices: dict = None) -> st
         body += (f"\n재진입선 {dch:,.0f} ({(dch/close-1)*100:+.1f}%)"
                  f"\n  → 횡보 시 {eta}경 {lvl:,.0f}")
 
-    # ── 미실행 비용 한 줄 ────────────────────────────────────
+    # ── 기준일별 검증 (수익률만. 금액은 자산 규모가 드러나므로 넣지 않는다) ──
     track = ""
-    rows = track_scenarios(d)
-    if rows:
+    for start, label in CONFIG['TRACK']:
+        rows = track_scenarios(d, start)
+        if not rows:
+            continue
         avg_h = sum(r['hold'] for r in rows) / len(rows)
         avg_s = sum(r['strat'] for r in rows) / len(rows)
-        gap = avg_h - avg_s
-        track = (f"\n\n미실행 비용 {gap:+.1f}%"
-                 f" (100만원당 {-abs(gap)*10000:,.0f}원)")
+        nd = int((d.index > pd.Timestamp(start)).sum())
+        track += (f"\n{label} {start[5:]} 기준 {nd}일"
+                  f" · 신호 {avg_s:+.1f}% / 보유 {avg_h:+.1f}%"
+                  f" · 차이 {avg_s - avg_h:+.1f}%p")
+    if track:
+        track = "\n" + track
 
     # ── 참고 종목 (한 줄) ────────────────────────────────────
     ref = ""
