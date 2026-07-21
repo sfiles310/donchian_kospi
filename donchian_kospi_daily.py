@@ -355,20 +355,43 @@ def track_scenarios(d: pd.DataFrame) -> list:
     return rows
 
 
-def _fmt_tracking(rows: list) -> str:
+def _dwidth(s: str) -> int:
+    """한글·전각 문자는 화면상 2칸을 차지한다. len()으로는 정렬이 깨진다."""
+    import unicodedata
+    return sum(2 if unicodedata.east_asian_width(c) in 'WF' else 1 for c in s)
+
+
+def _dpad(s: str, width: int) -> str:
+    """표시폭 기준 좌측 정렬 패딩. 넘치면 잘라낸다."""
+    while _dwidth(s) > width:
+        s = s[:-1]
+    return s + ' ' * (width - _dwidth(s))
+
+
+def _fmt_tracking(rows: list, ndays: int = None) -> str:
+    """한눈에 읽히도록 고정폭 블록으로. 결론 한 줄이 먼저 오게 배치한다."""
     if not rows:
         return ""
-    out = (f"\n\n─────────────\n_전략 검증_ ({CONFIG['TRACK_FROM']} 매도 신호 기준)\n"
-           "종목별 · 신호준수 vs 미실행보유\n")
-    for r in rows:
-        out += (f" · {r['name']}\n"
-                f"   신호준수 `{r['strat']:+.1f}%` / 미실행 `{r['hold']:+.1f}%`"
-                f"  → 차이 `{r['gap']:+.1f}%p`\n")
     avg_s = sum(r['strat'] for r in rows) / len(rows)
     avg_h = sum(r['hold'] for r in rows) / len(rows)
-    out += (f"평균: 신호준수 `{avg_s:+.1f}%` / 미실행 `{avg_h:+.1f}%`\n"
-            f"미실행 비용: `{avg_h - avg_s:+.1f}%p`\n"
-            f"※ '미실행'이 지금 매도할 때 확정되는 값입니다.")
+    gap = avg_h - avg_s
+    money = abs(gap) * 10000  # 100만원당 원
+
+    since = f"{CONFIG['TRACK_FROM']} 매도 신호"
+    if ndays is not None:
+        since += f" · {ndays}거래일 경과"
+
+    out = f"\n\n─────────────\n*안 팔아서 생긴 차이  {gap:+.1f}%p*\n_{since}_\n"
+    W = 20
+    out += "```\n"
+    out += _dpad('팔았다면', W)    + f"{avg_s:>7.1f}%\n"
+    out += _dpad('안 팔았다면', W) + f"{avg_h:>7.1f}%\n"
+    out += '-' * (W + 8) + "\n"
+    out += _dpad('100만원당', W)   + f"{-money:>7,.0f}원\n\n"
+    for r in rows:
+        out += _dpad(r['name'], W) + f"{r['hold']:>7.1f}%\n"
+    out += "```"
+    out += "\n'안 팔았다면'이 오늘 매도 시 확정되는 값입니다."
     return out
 
 
@@ -447,7 +470,7 @@ def build_message(d: pd.DataFrame, signal_today: str, prices: dict = None) -> st
             px = f"`{p[0]:,.0f}` ({p[1]:+.2f}%)" if p else "(조회 실패)"
             ref += f"\n · {name} {px}\n   {note}"
 
-    return head + phase + detail + proj + _fmt_tracking(track_scenarios(d)) + ref
+    return head + phase + detail + proj + _fmt_tracking(track_scenarios(d), ndays) + ref
 
 # ─────────────────────────────────────────────────────────────────
 # HTML 대시보드 생성
