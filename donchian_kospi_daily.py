@@ -539,7 +539,19 @@ def render_dashboard(d: pd.DataFrame, signals: pd.DataFrame) -> Path:
         'current_position': int(last['position']),
         'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
-    sig_list = signals.tail(10).to_dict(orient='records') if not signals.empty else []
+    # 이력도 텔레그램·차트와 같은 기준으로: 포지션 전환일이 아니라 '조건 충족일'.
+    # 전환일만 담으면 7/3 이후 조건이 5번 더 참이었던 사실이 이력에서 사라진다.
+    turn = d['position'].diff().fillna(0)
+    cond = d[d['long_entry'] | d['long_exit']].tail(12)
+    sig_list = [{
+        'date':  idx.strftime('%Y-%m-%d'),
+        'type':  'BUY' if row['long_entry'] else 'SELL',
+        'price': round(float(row['close']), 2),
+        'turn':  bool(turn.get(idx, 0) != 0),
+    } for idx, row in cond.iterrows()]
+    sig_list.reverse()   # 최신이 위로
+
+    summary['managed'] = [name for _, name in CONFIG['MANAGED']]
 
     payload = json.dumps({
         'summary': summary, 'chart': chart_data, 'signals': sig_list

@@ -139,12 +139,12 @@
     <span class="legend-item"><span style="width:14px; height:2px; background:var(--blue);"></span>코스피 종가</span>
     <span class="legend-item"><span style="width:14px; border-top:2px dashed var(--green);"></span>20일 상단 (매수선)</span>
     <span class="legend-item"><span style="width:14px; border-top:2px dashed var(--red);"></span>20일 하단 (매도선)</span>
-    <span class="legend-item"><span style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:8px solid var(--green);"></span>매수 진입</span>
-    <span class="legend-item"><span style="width:8px;height:8px;background:var(--red);transform:rotate(45deg);"></span>매도 청산</span>
+    <span class="legend-item"><span style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:8px solid var(--green);"></span>매수 조건 충족</span>
+    <span class="legend-item"><span style="width:8px;height:8px;background:var(--red);transform:rotate(45deg);"></span>매도 조건 충족</span>
   </div>
   <div class="chart-wrap"><canvas id="mainChart"></canvas></div>
 
-  <div class="section-title">최근 매매 신호 이력</div>
+  <div class="section-title">최근 조건 충족 이력</div>
   <div class="card" style="padding: 0;">
     <table>
       <thead><tr><th>날짜</th><th>신호</th><th>코스피 종가</th><th>행동</th></tr></thead>
@@ -185,23 +185,28 @@ const icon   = document.getElementById('signal-icon');
 const title  = document.getElementById('signal-title');
 const sub    = document.getElementById('signal-sub');
 
-if (S.current_position === 1 && S.sell_signal) {
+// 포지션 전환일이 아니라 '조건 충족 여부'로 판정한다.
+// 전환일만 보면 이미 현금 국면일 때 매도 조건이 참이어도 배너가 침묵한다.
+const TICKERS = (S.managed && S.managed.length) ? S.managed.join(', ') : '관리 종목';
+const phase = S.current_position === 1 ? '보유' : '현금';
+
+if (S.sell_signal) {
   banner.className = 'signal-banner signal-sell';
   icon.className = 'signal-icon sell'; icon.textContent = '▼';
-  title.textContent = '매도 신호 — 다음 거래일 ACE 200 TR 매도';
-  sub.textContent = `당일 저가(${fmt(S.low)})가 20일 하단(${fmt(S.dc_low20)})을 이탈`;
-} else if (S.current_position === 0 && S.buy_signal) {
+  title.textContent = `매도 조건 충족 — 다음 거래일 시가 매도: ${TICKERS}`;
+  sub.textContent = `당일 저가(${fmt(S.low)})가 20일 하단(${fmt(S.dc_low20)})을 이탈 · 국면 ${phase}`;
+} else if (S.buy_signal) {
   banner.className = 'signal-banner signal-buy';
   icon.className = 'signal-icon buy'; icon.textContent = '▲';
-  title.textContent = '매수 신호 — 다음 거래일 ACE 200 TR 매수';
-  sub.textContent = `당일 고가(${fmt(S.high)})가 20일 상단(${fmt(S.dc_high20)})을 돌파`;
+  title.textContent = `매수 조건 충족 — 다음 거래일 시가 매수: ${TICKERS}`;
+  sub.textContent = `당일 고가(${fmt(S.high)})가 20일 상단(${fmt(S.dc_high20)})을 돌파 · 국면 ${phase}`;
 } else if (S.current_position === 1) {
-  title.textContent = '보유 유지 — 추가 행동 없음';
-  sub.textContent = `현재 ACE 200 TR 보유 중. 매도선까지 ${gapSell.toFixed(2)}% 여유`;
+  title.textContent = '조건 미충족 — 추가 행동 없음';
+  sub.textContent = `국면 보유. 매도선까지 ${gapSell.toFixed(2)}% 여유`;
 } else {
   icon.textContent = '○';
-  title.textContent = '현금 대기';
-  sub.textContent = `매수선까지 ${gapBuy.toFixed(2)}% 남음`;
+  title.textContent = '조건 미충족';
+  sub.textContent = `국면 현금. 매수선까지 ${gapBuy.toFixed(2)}% 남음`;
 }
 
 new Chart(document.getElementById('mainChart'), {
@@ -235,13 +240,18 @@ const tbody = document.getElementById('signals-body');
 if (SIGNALS.length === 0) {
   tbody.innerHTML = '<tr><td colspan="4" style="color:var(--text-3); text-align:center; padding:24px;">최근 신호 없음</td></tr>';
 } else {
-  [...SIGNALS].reverse().forEach(s => {
+  // Python에서 이미 최신순으로 정렬해 보낸다
+  SIGNALS.forEach(s => {
     const isBuy = s.type === 'BUY';
+    const act = `다음 거래일 시가 ${isBuy ? '매수' : '매도'}: ${TICKERS}`;
+    const turn = s.turn
+      ? '<span class="badge" style="margin-left:6px">국면 전환</span>'
+      : '';
     tbody.innerHTML += `<tr>
       <td>${s.date}</td>
-      <td><span class="badge ${isBuy ? 'badge-buy' : 'badge-sell'}">${isBuy ? '▲ 매수' : '▼ 매도'}</span></td>
+      <td><span class="badge ${isBuy ? 'badge-buy' : 'badge-sell'}">${isBuy ? '▲ 매수' : '▼ 매도'}</span>${turn}</td>
       <td>${fmt(s.price)}</td>
-      <td style="color:var(--text-2)">${isBuy ? '다음 거래일 ACE 200 TR 매수' : '다음 거래일 ACE 200 TR 매도'}</td>
+      <td style="color:var(--text-2)">${act}</td>
     </tr>`;
   });
 }
