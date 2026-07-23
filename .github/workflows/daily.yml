@@ -28,10 +28,8 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: 신호 생성 + 알림
+      - name: 신호 생성 (알림은 로컬 스케줄러 전용)
         env:
-          TG_BOT_TOKEN:         ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID:           ${{ secrets.TG_CHAT_ID }}
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           PYTHONIOENCODING:     utf-8
