@@ -202,7 +202,36 @@ def update_signal_log(d: pd.DataFrame) -> pd.DataFrame:
 # ─────────────────────────────────────────────────────────────────
 # Supabase 발행 — 앱(strategy_signal)이 읽는 최신 스냅샷 upsert
 # ─────────────────────────────────────────────────────────────────
-def publish_supabase(d: pd.DataFrame, signals: pd.DataFrame) -> bool:
+def notification_completed_today() -> bool:
+    """Supabase의 마지막 완료일로 같은 날 중복 알림을 막는다."""
+    url = CONFIG['SUPABASE_URL'].rstrip('/')
+    key = CONFIG['SUPABASE_SERVICE_KEY']
+    if not url or not key:
+        return False
+
+    endpoint = f"{url}/rest/v1/strategy_signal"
+    headers = {
+        'apikey': key,
+        'Authorization': f'Bearer {key}',
+    }
+    params = {
+        'strategy': 'eq.donchian_kospi',
+        'select': 'updated_at',
+        'limit': '1',
+    }
+    try:
+        r = requests.get(endpoint, headers=headers, params=params, timeout=10)
+        r.raise_for_status()
+        rows = r.json()
+        updated_at = rows[0].get('updated_at', '') if rows else ''
+        return str(updated_at).startswith(datetime.now().strftime('%Y-%m-%d'))
+    except Exception as e:
+        log.warning(f"알림 완료 여부 확인 실패. 누락 방지를 위해 발송 시도: {_redact(str(e))}")
+        return False
+
+
+def publish_supabase(d: pd.DataFrame, signals: pd.DataFrame,
+                     mark_notification_complete: bool = True) -> bool:
     """최근 60일 차트 + 현재 국면을 앱 스키마로 변환해 strategy_signal에 upsert."""
     url = CONFIG['SUPABASE_URL'].rstrip('/')
     key = CONFIG['SUPABASE_SERVICE_KEY']
@@ -231,8 +260,9 @@ def publish_supabase(d: pd.DataFrame, signals: pd.DataFrame) -> bool:
         'last_signal':      (last_sig['type'] if last_sig is not None else None),
         'last_signal_date': (last_sig['date'] if last_sig is not None else None),
         'chart':            chart,
-        'updated_at':       datetime.now().isoformat(),
     }
+    if mark_notification_complete:
+        payload['updated_at'] = datetime.now().isoformat()
 
     endpoint = f"{url}/rest/v1/strategy_signal?on_conflict=strategy"
     headers = {
@@ -614,9 +644,6 @@ def main():
     # 5. HTML 대시보드 갱신
     dashboard_path = render_dashboard(d, signals)
 
-    # 5-2. Supabase 발행 (앱 카드 데이터 갱신)
-    publish_supabase(d, signals)
-
     # 6. 텔레그램 푸시 — 조건 충족일 또는 NOTIFY_ALWAYS=True
     prices = fetch_prices(CONFIG['MANAGED'] + CONFIG['REFERENCE'])
     msg = build_message(d, signal_today, prices)
@@ -634,14 +661,24 @@ def main():
     if cond_hit:
         log.info(f"조건 충족일 — {'매수' if last['long_entry'] else '매도'} 조건 TRUE")
 
-    if signal_today or cond_hit or CONFIG['NOTIFY_ALWAYS']:
-        ok = send_telegram(msg)
-        # 토큰/chat_id를 설정했는데도 전달이 실패했다면 CI를 빨간불로 만든다.
-        # 그러지 않으면 "초록불인데 알림은 안 옴" 상태를 알아챌 방법이 없다.
-        if not ok and CONFIG['TELEGRAM_BOT_TOKEN'] and CONFIG['TELEGRAM_CHAT_ID']:
-            raise RuntimeError("텔레그램 전달 실패 (위 로그의 사유 확인)")
+    notify_due = bool(signal_today or cond_hit or CONFIG['NOTIFY_ALWAYS'])
+    notification_complete = not notify_due
+    if notify_due:
+        if notification_completed_today():
+            log.info("오늘 알림은 이미 발송됨. 중복 푸시 생략")
+            notification_complete = True
+        else:
+            notification_complete = send_telegram(msg)
+            # 토큰/chat_id를 설정했는데도 전달이 실패했다면 CI를 빨간불로 만든다.
+            # 그러지 않으면 "초록불인데 알림은 안 옴" 상태를 알아챌 방법이 없다.
+            if (not notification_complete and CONFIG['TELEGRAM_BOT_TOKEN']
+                    and CONFIG['TELEGRAM_CHAT_ID']):
+                raise RuntimeError("텔레그램 전달 실패 (위 로그의 사유 확인)")
     else:
         log.info("신호 변화 없음 → 텔레그램 푸시 생략 (NOTIFY_ALWAYS=False)")
+
+    # 알림 성공 뒤에 완료 시각을 기록한다. 실패한 실행은 다음 실행이 재시도한다.
+    publish_supabase(d, signals, mark_notification_complete=notification_complete)
 
     log.info(f"대시보드: file:///{dashboard_path.as_posix()}")
     log.info("DONE")

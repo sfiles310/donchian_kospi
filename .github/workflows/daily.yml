@@ -2,8 +2,8 @@ name: KOSPI Donchian Daily
 
 on:
   schedule:
-    # 07:30 UTC = 16:30 KST (장 마감 15:30 이후). 평일만.
-    - cron: '30 7 * * 1-5'
+    # 09:00 UTC = 18:00 KST. 16:30 로컬 실행 실패 시 평일 백업 발송.
+    - cron: '0 9 * * 1-5'
   workflow_dispatch:        # 수동 실행 버튼
 
 permissions:
@@ -28,8 +28,10 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: 신호 생성 (알림은 로컬 스케줄러 전용)
+      - name: 신호 생성 + 미발송 시 백업 알림
         env:
+          TG_BOT_TOKEN:         ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID:           ${{ secrets.TG_CHAT_ID }}
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           PYTHONIOENCODING:     utf-8

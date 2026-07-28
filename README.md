@@ -55,9 +55,9 @@ python donchian_kospi_daily.py
 ## 📊 실제 사용 흐름
 
 ```
-매일 오후 4:30 — GitHub Actions 자동 실행
+매일 오후 4:30 — Windows 스케줄러 1차 실행
    ↓
-매도/매수 조건 충족일마다 — 텔레그램 알림 도착
+오후 6:00 이후 — GitHub Actions가 미발송일 때만 백업 알림
    ↓
 알림 확인 — GitHub Pages 대시보드에서 상세 확인
    ↓
