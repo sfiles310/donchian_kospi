@@ -86,14 +86,114 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────
-# 데이터 수집 (pykrx 우선, 실패 시 FinanceDataReader 백업)
+# 데이터 수집 (pykrx/FDR 이력 + 네이버 확정 시세 검증)
 # ─────────────────────────────────────────────────────────────────
+NAVER_CHART_URL = "https://api.stock.naver.com/chart/domestic/{kind}/{code}"
+NAVER_INDEX_REALTIME_URL = "https://polling.finance.naver.com/api/realtime/domestic/index/KOSPI"
+
+
+def _validate_ohlc(df: pd.DataFrame, source: str) -> None:
+    """가격 기본 관계가 깨진 데이터는 알림·차트에 사용하지 않는다."""
+    if df.empty or df.index.has_duplicates or not df.index.is_monotonic_increasing:
+        raise RuntimeError(f"{source} 데이터의 날짜축이 올바르지 않습니다.")
+    if df[['open', 'high', 'low', 'close']].isna().any().any():
+        raise RuntimeError(f"{source} 데이터에 결측값이 있습니다.")
+    invalid = (
+        (df[['open', 'high', 'low', 'close']] <= 0).any(axis=1)
+        | (df['high'] < df[['open', 'close']].max(axis=1))
+        | (df['low'] > df[['open', 'close']].min(axis=1))
+        | (df['high'] < df['low'])
+    )
+    if invalid.any():
+        dates = ', '.join(df.index[invalid].strftime('%Y-%m-%d')[:3])
+        raise RuntimeError(f"{source} OHLC 관계 오류: {dates}")
+
+
+def _fetch_naver_chart(code: str, kind: str = 'index') -> pd.DataFrame:
+    """네이버 일봉 API에서 지수 또는 종목의 확정 OHLC를 가져온다."""
+    url = NAVER_CHART_URL.format(kind=kind, code=code)
+    r = requests.get(
+        url,
+        params={'periodType': 'dayCandle'},
+        headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://finance.naver.com/'},
+        timeout=15,
+    )
+    r.raise_for_status()
+    rows = r.json().get('priceInfos', [])
+    df = pd.DataFrame([{
+        'date': x['localDate'],
+        'open': x['openPrice'],
+        'high': x['highPrice'],
+        'low': x['lowPrice'],
+        'close': x['closePrice'],
+    } for x in rows])
+    if df.empty:
+        raise RuntimeError(f"네이버 {code} 일봉 데이터가 비어 있습니다.")
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.set_index('date').astype(float).sort_index()
+    _validate_ohlc(df, f"네이버 {code}")
+    return df
+
+
+def _fetch_closed_kospi_data() -> pd.DataFrame:
+    """서로 다른 네이버 엔드포인트가 동일한 장 마감값을 줄 때만 반환한다."""
+    chart = _fetch_naver_chart('KOSPI')
+    r = requests.get(
+        NAVER_INDEX_REALTIME_URL,
+        headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://finance.naver.com/'},
+        timeout=15,
+    )
+    r.raise_for_status()
+    rows = r.json().get('datas', [])
+    if not rows:
+        raise RuntimeError("코스피 장 상태 데이터가 비어 있습니다.")
+    market = rows[0]
+    if market.get('marketStatus') != 'CLOSE':
+        raise RuntimeError(f"코스피 장 마감 전입니다: {market.get('marketStatus', 'UNKNOWN')}")
+
+    traded_at = str(market.get('localTradedAt', ''))[:10]
+    last_date = chart.index[-1].strftime('%Y-%m-%d')
+    if traded_at != last_date:
+        raise RuntimeError(f"코스피 확정일 불일치: 일봉 {last_date}, 실시간 {traded_at}")
+
+    last = chart.iloc[-1]
+    realtime = {
+        'open': float(market['openPriceRaw']),
+        'high': float(market['highPriceRaw']),
+        'low': float(market['lowPriceRaw']),
+        'close': float(market['closePriceRaw']),
+    }
+    mismatch = [k for k, v in realtime.items() if abs(float(last[k]) - v) > 0.001]
+    if mismatch:
+        raise RuntimeError(f"코스피 확정 OHLC 교차검증 실패: {', '.join(mismatch)}")
+    return chart
+
+
+def _merge_verified_history(history: pd.DataFrame, verified: pd.DataFrame) -> pd.DataFrame:
+    """최근 구간은 교차검증된 시세로 덮어써 차트의 오래된 캐시를 제거한다."""
+    if len(verified) < 60:
+        raise RuntimeError(f"검증 시세가 60거래일보다 적습니다: {len(verified)}행")
+    overlap = history.index.intersection(verified.index)
+    if len(overlap) < 60:
+        raise RuntimeError(f"기본 시세와 검증 시세의 공통 구간이 부족합니다: {len(overlap)}행")
+
+    changed = (history.loc[overlap] - verified.loc[overlap]).abs().gt(0.001).any(axis=1)
+    if changed.any():
+        dates = ', '.join(overlap[changed].strftime('%Y-%m-%d'))
+        log.warning(f"기본 시세 불일치 {int(changed.sum())}건을 검증 시세로 교정: {dates}")
+
+    merged = pd.concat([history.loc[history.index < verified.index[0]], verified]).sort_index()
+    _validate_ohlc(merged, "병합 코스피")
+    return merged
+
+
 def fetch_kospi_data(days: int = 400) -> pd.DataFrame:
-    """코스피 지수 OHLCV 가져오기. pykrx → fdr 순으로 시도."""
+    """코스피 이력을 가져온 뒤 최근 구간을 장 마감 확정 시세로 검증·교정한다."""
     end = datetime.now()
     start = end - timedelta(days=days * 1.6)  # 주말·휴일 고려해 넉넉히
     start_str = start.strftime('%Y%m%d')
     end_str   = end.strftime('%Y%m%d')
+    df = None
 
     # 1차: pykrx
     try:
@@ -117,25 +217,30 @@ def fetch_kospi_data(days: int = 400) -> pd.DataFrame:
         df.index = pd.to_datetime(df.index)
         df = df.sort_index()
         log.info(f"pykrx 수집 완료: {len(df)}행 ({df.index[0].date()} ~ {df.index[-1].date()})")
-        return df
     except Exception as e:
+        df = None
         log.warning(f"pykrx 실패: {e}. FinanceDataReader로 fallback 시도")
 
     # 2차: FinanceDataReader 백업
-    try:
-        import FinanceDataReader as fdr
-        log.info("FinanceDataReader로 코스피 데이터 수집")
-        df = fdr.DataReader('KS11',
-                            start.strftime('%Y-%m-%d'),
-                            end.strftime('%Y-%m-%d'))
-        df.columns = [c.lower() for c in df.columns]
-        df = df[['open','high','low','close']].astype(float)
-        df = df.dropna().sort_index()
-        log.info(f"FDR 수집 완료: {len(df)}행")
-        return df
-    except Exception as e:
-        log.error(f"모든 데이터 소스 실패: {e}")
-        raise RuntimeError("코스피 데이터를 가져올 수 없습니다.")
+    if df is None:
+        try:
+            import FinanceDataReader as fdr
+            log.info("FinanceDataReader로 코스피 데이터 수집")
+            df = fdr.DataReader('KS11',
+                                start.strftime('%Y-%m-%d'),
+                                end.strftime('%Y-%m-%d'))
+            df.columns = [c.lower() for c in df.columns]
+            df = df[['open','high','low','close']].astype(float)
+            df = df.dropna().sort_index()
+            log.info(f"FDR 수집 완료: {len(df)}행")
+        except Exception as e:
+            log.error(f"모든 데이터 소스 실패: {e}")
+            raise RuntimeError("코스피 데이터를 가져올 수 없습니다.")
+
+    verified = _fetch_closed_kospi_data()
+    df = _merge_verified_history(df, verified)
+    log.info(f"코스피 확정 시세 검증 완료: {df.index[-1].date()} 종가 {df['close'].iloc[-1]:,.2f}")
+    return df
 
 # ─────────────────────────────────────────────────────────────────
 # 돈치안 신호 계산
@@ -335,17 +440,18 @@ def send_telegram(text: str) -> bool:
 # ─────────────────────────────────────────────────────────────────
 # 보조 정보: 종목 현재가 / 채널 전망
 # ─────────────────────────────────────────────────────────────────
-def fetch_prices(items) -> dict:
-    """종목별 최신 종가. 실패해도 신호 알림은 나가야 하므로 예외를 삼킨다."""
+def fetch_prices(items, as_of_date: str) -> dict:
+    """지수 기준일과 같은 날짜의 종목 종가만 반환한다."""
     out = {}
+    target = pd.Timestamp(as_of_date)
     for entry in items:
         code, name = entry[0], entry[1]
         try:
-            import FinanceDataReader as fdr
-            start = (datetime.now() - timedelta(days=14)).strftime('%Y-%m-%d')
-            e = fdr.DataReader(code, start)
-            e.columns = [c.lower() for c in e.columns]
-            px = e['close'].astype(float).dropna()
+            e = _fetch_naver_chart(code, kind='item').loc[:target]
+            if e.empty or e.index[-1] != target:
+                actual = e.index[-1].strftime('%Y-%m-%d') if not e.empty else '없음'
+                raise RuntimeError(f"기준일 {as_of_date} 종가 없음 (최신 {actual})")
+            px = e['close']
             out[code] = (float(px.iloc[-1]), float(px.pct_change().iloc[-1]) * 100)
         except Exception as ex:
             log.warning(f"{name}({code}) 가격 조회 실패: {ex}")
@@ -379,14 +485,17 @@ def track_scenarios(d: pd.DataFrame, start: str) -> list:
     누적값이 어긋나지 않는다.
     """
     rows = []
+    end = d.index[-1]
     for code, name in CONFIG['MANAGED']:
         try:
-            import FinanceDataReader as fdr
-            e = fdr.DataReader(code, start)
-            e.columns = [c.lower() for c in e.columns]
-            e = e[['open', 'close']].astype(float).dropna()
+            e = _fetch_naver_chart(code, kind='item').loc[pd.Timestamp(start):end, ['open', 'close']]
             if len(e) < 2:
                 continue
+            if e.index[-1] != end:
+                raise RuntimeError(
+                    f"지수 기준일 {end.strftime('%Y-%m-%d')}과 종목 기준일 "
+                    f"{e.index[-1].strftime('%Y-%m-%d')} 불일치"
+                )
 
             # 지수 신호를 ETF 날짜축에 정렬. 신호(종가) -> 다음 거래일 시가 체결이므로
             # [시가(t-1) -> 시가(t)] 구간의 보유 여부는 종가(t-2) 시점 신호가 결정한다.
@@ -643,7 +752,7 @@ def main():
     dashboard_path = render_dashboard(d, signals)
 
     # 6. 텔레그램 푸시 — 조건 충족일 또는 NOTIFY_ALWAYS=True
-    prices = fetch_prices(CONFIG['MANAGED'] + CONFIG['REFERENCE'])
+    prices = fetch_prices(CONFIG['MANAGED'] + CONFIG['REFERENCE'], last_date)
     msg = build_message(d, signal_today, prices)
     # 콘솔 인코딩(cp949)이 못 찍는 문자가 있어도 알림은 나가야 한다
     print("\n" + "=" * 60)

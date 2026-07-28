@@ -1,0 +1,50 @@
+import unittest
+from unittest.mock import Mock, patch
+
+import pandas as pd
+
+import donchian_kospi_daily as app
+
+
+def sample_ohlc(periods=61):
+    index = pd.bdate_range('2026-04-01', periods=periods)
+    return pd.DataFrame({
+        'open': range(100, 100 + periods),
+        'high': range(102, 102 + periods),
+        'low': range(99, 99 + periods),
+        'close': range(101, 101 + periods),
+    }, index=index, dtype=float)
+
+
+class MarketDataValidationTest(unittest.TestCase):
+    def test_verified_history_replaces_stale_recent_value(self):
+        verified = sample_ohlc()
+        history = verified.copy()
+        history.iloc[-1, history.columns.get_loc('close')] += 1
+
+        merged = app._merge_verified_history(history, verified)
+
+        self.assertEqual(merged.iloc[-1]['close'], verified.iloc[-1]['close'])
+
+    def test_invalid_ohlc_is_rejected(self):
+        data = sample_ohlc()
+        data.iloc[-1, data.columns.get_loc('low')] = data.iloc[-1]['high'] + 1
+
+        with self.assertRaisesRegex(RuntimeError, 'OHLC 관계 오류'):
+            app._validate_ohlc(data, 'test')
+
+    @patch.object(app, '_fetch_naver_chart')
+    @patch.object(app.requests, 'get')
+    def test_market_open_is_rejected(self, get, chart):
+        chart.return_value = sample_ohlc()
+        response = Mock()
+        response.json.return_value = {'datas': [{'marketStatus': 'OPEN'}]}
+        response.raise_for_status.return_value = None
+        get.return_value = response
+
+        with self.assertRaisesRegex(RuntimeError, '장 마감 전'):
+            app._fetch_closed_kospi_data()
+
+
+if __name__ == '__main__':
+    unittest.main()

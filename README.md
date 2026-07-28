@@ -57,7 +57,7 @@ python donchian_kospi_daily.py
 ```
 매일 오후 4:30 — Windows 스케줄러 1차 실행
    ↓
-오후 6:00 이후 — GitHub Actions가 미발송일 때만 백업 알림
+오후 4:40 이후 — GitHub Actions가 차트 갱신 + 미발송일 때만 백업 알림
    ↓
 알림 확인 — GitHub Pages 대시보드에서 상세 확인
    ↓

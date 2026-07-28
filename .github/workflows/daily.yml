@@ -2,8 +2,8 @@ name: KOSPI Donchian Daily
 
 on:
   schedule:
-    # 09:00 UTC = 18:00 KST. 16:30 로컬 실행 실패 시 평일 백업 발송.
-    - cron: '0 9 * * 1-5'
+    # 07:40 UTC = 16:40 KST. 확정 시세로 대시보드를 갱신하고 로컬 실패 시 백업 발송.
+    - cron: '40 7 * * 1-5'
   workflow_dispatch:        # 수동 실행 버튼
 
 permissions:
