@@ -74,6 +74,7 @@ CONFIG = {
 SCRIPT_DIR = Path(__file__).parent.resolve()
 OUT_DIR = SCRIPT_DIR / CONFIG['OUTPUT_DIR']
 OUT_DIR.mkdir(exist_ok=True)
+PENDING_RUN_PATH = OUT_DIR / 'pending_run.json'
 
 logging.basicConfig(
     level=logging.INFO,
@@ -335,14 +336,8 @@ def notification_completed(as_of_date: str) -> bool:
         return False
 
 
-def publish_supabase(d: pd.DataFrame, signals: pd.DataFrame) -> bool:
-    """최근 60일 차트 + 현재 국면을 앱 스키마로 변환해 strategy_signal에 upsert."""
-    url = CONFIG['SUPABASE_URL'].rstrip('/')
-    key = CONFIG['SUPABASE_SERVICE_KEY']
-    if not url or not key:
-        log.warning("SUPABASE_URL/SERVICE_KEY 미설정. Supabase 발행 생략")
-        return False
-
+def _build_supabase_payload(d: pd.DataFrame, signals: pd.DataFrame) -> dict:
+    """현재 실행 결과를 Supabase 발행 스키마로 변환한다."""
     plot_df = d.dropna(subset=['dc_high', 'dc_low']).tail(60)
     chart = [{
         'date':     idx.strftime('%Y-%m-%d'),
@@ -354,7 +349,7 @@ def publish_supabase(d: pd.DataFrame, signals: pd.DataFrame) -> bool:
 
     last = d.iloc[-1]
     last_sig = signals.iloc[-1] if not signals.empty else None
-    payload = {
+    return {
         'strategy':         'donchian_kospi',
         'as_of_date':       d.index[-1].strftime('%Y-%m-%d'),
         'close':            round(float(last['close']),   2),
@@ -366,6 +361,15 @@ def publish_supabase(d: pd.DataFrame, signals: pd.DataFrame) -> bool:
         'chart':            chart,
         'updated_at':       datetime.now().isoformat(),
     }
+
+
+def _publish_supabase_payload(payload: dict) -> bool:
+    """미리 생성된 실행 결과를 strategy_signal에 upsert한다."""
+    url = CONFIG['SUPABASE_URL'].rstrip('/')
+    key = CONFIG['SUPABASE_SERVICE_KEY']
+    if not url or not key:
+        log.warning("SUPABASE_URL/SERVICE_KEY 미설정. Supabase 발행 생략")
+        return False
 
     endpoint = f"{url}/rest/v1/strategy_signal?on_conflict=strategy"
     headers = {
@@ -383,6 +387,11 @@ def publish_supabase(d: pd.DataFrame, signals: pd.DataFrame) -> bool:
         detail = getattr(getattr(e, 'response', None), 'text', '')
         log.error(f"Supabase 발행 실패: {e} {detail}")
         return False
+
+
+def publish_supabase(d: pd.DataFrame, signals: pd.DataFrame) -> bool:
+    """최근 60일 차트 + 현재 국면을 앱 스키마로 변환해 strategy_signal에 upsert."""
+    return _publish_supabase_payload(_build_supabase_payload(d, signals))
 
 # ─────────────────────────────────────────────────────────────────
 # 텔레그램 푸시
@@ -436,6 +445,51 @@ def send_telegram(text: str) -> bool:
     except Exception as e:
         log.error(f"텔레그램 푸시 실패: {_redact(str(e))}")
         return False
+
+
+def dashboard_is_current(as_of_date: str) -> bool:
+    """알림 링크의 대시보드가 같은 기준일까지 배포됐는지 확인한다."""
+    try:
+        r = requests.get(
+            CONFIG['PAGES_URL'],
+            params={'as_of': as_of_date},
+            headers={'Cache-Control': 'no-cache'},
+            timeout=10,
+        )
+        r.raise_for_status()
+        return f'"last_date": "{as_of_date}"' in r.text
+    except Exception as e:
+        log.warning(f"대시보드 기준일 확인 실패: {_redact(str(e))}")
+        return False
+
+
+def save_pending_run(d: pd.DataFrame, signals: pd.DataFrame,
+                     message: str, notify: bool) -> None:
+    """Pages 배포 뒤 동일 실행 결과를 발송할 수 있도록 저장한다."""
+    supabase_payload = _build_supabase_payload(d, signals)
+    pending = {
+        'as_of_date': supabase_payload['as_of_date'],
+        'message': message,
+        'notify': notify,
+        'supabase_payload': supabase_payload,
+    }
+    PENDING_RUN_PATH.write_text(
+        json.dumps(pending, ensure_ascii=False), encoding='utf-8'
+    )
+    log.info(f"배포 후 처리 파일 저장: {PENDING_RUN_PATH}")
+
+
+def finalize_pending_run() -> None:
+    """Pages 배포가 끝난 뒤 준비 단계와 동일한 알림·데이터를 발행한다."""
+    if not PENDING_RUN_PATH.exists():
+        raise RuntimeError(f"배포 후 처리 파일이 없습니다: {PENDING_RUN_PATH}")
+    pending = json.loads(PENDING_RUN_PATH.read_text(encoding='utf-8'))
+    if pending['notify'] and not send_telegram(pending['message']):
+        raise RuntimeError("텔레그램 전달 실패 (위 로그의 사유 확인)")
+    if not pending['notify']:
+        log.info(f"{pending['as_of_date']} 알림은 이미 발송됨. 중복 푸시 생략")
+    _publish_supabase_payload(pending['supabase_payload'])
+    log.info("Pages 배포 후 알림·데이터 발행 완료")
 
 # ─────────────────────────────────────────────────────────────────
 # 보조 정보: 종목 현재가 / 채널 전망
@@ -651,8 +705,13 @@ def build_message(d: pd.DataFrame, signal_today: str, prices: dict = None) -> st
         if p:
             ref += f"\n[미적용] {name} {p[0]:,.0f}"
 
-    link = f"\n\n상세 ▸ {CONFIG['PAGES_URL']}"
+    link = f"\n\n상세 ▸ {CONFIG['PAGES_URL']}?as_of={date_str}"
     return head + body + track + ref + link
+
+
+def build_test_message(message: str) -> str:
+    """셸 인코딩을 거치지 않는 재발송 확인용 제목을 붙인다."""
+    return "<b>[반영 확인 테스트]</b>\n" + message
 
 # ─────────────────────────────────────────────────────────────────
 # HTML 대시보드 생성
@@ -721,7 +780,7 @@ else:
 # ─────────────────────────────────────────────────────────────────
 # 메인
 # ─────────────────────────────────────────────────────────────────
-def main():
+def main(force_notification: bool = False):
     log.info("=" * 60)
     log.info("KOSPI Donchian 20 Daily Signal — START")
     log.info("=" * 60)
@@ -754,6 +813,8 @@ def main():
     # 6. 텔레그램 푸시 — 조건 충족일 또는 NOTIFY_ALWAYS=True
     prices = fetch_prices(CONFIG['MANAGED'] + CONFIG['REFERENCE'], last_date)
     msg = build_message(d, signal_today, prices)
+    if force_notification:
+        msg = build_test_message(msg)
     # 콘솔 인코딩(cp949)이 못 찍는 문자가 있어도 알림은 나가야 한다
     print("\n" + "=" * 60)
     try:
@@ -768,12 +829,27 @@ def main():
     if cond_hit:
         log.info(f"조건 충족일 — {'매수' if last['long_entry'] else '매도'} 조건 TRUE")
 
-    notify_due = bool(signal_today or cond_hit or CONFIG['NOTIFY_ALWAYS'])
-    notification_complete = not notify_due
-    if notify_due:
-        if notification_completed(last_date):
+    notify_due = bool(force_notification or signal_today or cond_hit
+                      or CONFIG['NOTIFY_ALWAYS'])
+    already_completed = (
+        notify_due and not force_notification and notification_completed(last_date)
+    )
+    defer_finalize = os.environ.get('DEFER_FINALIZE') == '1'
+    if defer_finalize:
+        save_pending_run(d, signals, msg,
+                         notify=bool(notify_due and not already_completed))
+        log.info("텔레그램 알림과 Supabase 발행은 Pages 배포 뒤로 연기")
+    elif notify_due:
+        if already_completed:
             log.info("오늘 알림은 이미 발송됨. 중복 푸시 생략")
-            notification_complete = True
+        elif not dashboard_is_current(last_date):
+            log.warning(
+                f"알림 링크의 대시보드가 아직 {last_date} 기준이 아님. "
+                "Pages 배포 작업으로 발송 연기"
+            )
+            log.info(f"대시보드: file:///{dashboard_path.as_posix()}")
+            log.info("DONE")
+            return
         else:
             notification_complete = send_telegram(msg)
             # 토큰/chat_id를 설정했는데도 전달이 실패했다면 CI를 빨간불로 만든다.
@@ -784,14 +860,20 @@ def main():
         log.info("신호 변화 없음 → 텔레그램 푸시 생략 (NOTIFY_ALWAYS=False)")
 
     # 알림 성공 뒤에 완료 시각을 기록한다. 실패한 실행은 다음 실행이 재시도한다.
-    publish_supabase(d, signals)
+    if not defer_finalize:
+        publish_supabase(d, signals)
 
     log.info(f"대시보드: file:///{dashboard_path.as_posix()}")
     log.info("DONE")
 
 if __name__ == '__main__':
     try:
-        main()
+        if '--finalize' in sys.argv:
+            finalize_pending_run()
+        elif '--test-notification' in sys.argv:
+            main(force_notification=True)
+        else:
+            main()
     except Exception as e:
         log.exception(f"실행 중 오류: {e}")
         # 오류도 텔레그램으로 알림

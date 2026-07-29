@@ -43,6 +43,12 @@ python donchian_kospi_daily.py
 
 콘솔에 신호 출력 + 텔레그램 푸시 + `output/dashboard.html` 생성되면 성공
 
+같은 날 알림을 한 번 더 확인할 때는 셸에서 한글을 조합하지 말고 전용 옵션을 사용합니다.
+
+```powershell
+python donchian_kospi_daily.py --test-notification
+```
+
 ---
 
 ## ⏰ 자동 실행 (선택)
@@ -55,9 +61,9 @@ python donchian_kospi_daily.py
 ## 📊 실제 사용 흐름
 
 ```
-매일 오후 4:30 — Windows 스케줄러 1차 실행
+매일 오후 4:30 — Windows 스케줄러가 확정 종가를 검증
    ↓
-오후 4:40 이후 — GitHub Actions가 차트 갱신 + 미발송일 때만 백업 알림
+오후 4:40 이후 — GitHub Actions가 차트를 먼저 갱신한 뒤 미발송 알림 전송
    ↓
 알림 확인 — GitHub Pages 대시보드에서 상세 확인
    ↓
