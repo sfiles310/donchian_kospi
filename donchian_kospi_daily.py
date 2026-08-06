@@ -181,6 +181,11 @@ def _fetch_closed_kospi_data() -> pd.DataFrame:
 
 
 INDEX_HISTORY_CSV = SCRIPT_DIR / 'data' / 'kospi_index_history.csv'
+# 네이버 일봉이 최근 110거래일(약 5.2개월)만 준다. 커밋된 이력이 그보다 오래되면
+# 두 구간 사이에 거래량 구멍이 생겨 FTD 판정 구간이 줄어든다. 구멍이 나기 전에 알린다.
+HISTORY_STALE_DAYS = 120
+# 거래량 연속성을 확인할 구간. FTD 화면이 그리는 길이보다 넉넉히 잡는다.
+VOLUME_CHECK_WINDOW = 200
 
 
 def _load_index_history() -> pd.DataFrame:
@@ -214,6 +219,37 @@ def _attach_volume_history(merged: pd.DataFrame) -> pd.DataFrame:
     covered = int(merged['volume'].notna().sum())
     log.info(f"거래량 이력 결합: {covered}/{len(merged)}행")
     return merged
+
+
+def index_history_note(d: pd.DataFrame) -> str:
+    """지수 거래량 이력을 갱신할 때가 됐는지 알린다.
+
+    문서에만 적어 두면 결국 놓친다. 구멍이 실제로 생기기 전에 알림으로 먼저 알리고,
+    이미 생겼으면 어디가 비었는지까지 말한다.
+    """
+    if 'volume' not in d.columns:
+        return ("\n\n<b>⚠ 지수 거래량 자료가 없습니다</b>\n"
+                "FTD를 판정할 수 없습니다. python refresh_index_history.py 실행")
+
+    # 이미 구멍이 났는지. 네이버가 덮는 최근 구간 앞쪽이 비어 있으면 이력이 낡은 것이다.
+    recent = d['volume'].tail(VOLUME_CHECK_WINDOW)
+    missing = int(recent.isna().sum())
+    if missing:
+        return ("\n\n<b>⚠ 지수 거래량 이력이 끊겼습니다</b>\n"
+                f"최근 {len(recent)}일 중 {missing}일 결측 · FTD 판정 구간이 줄었습니다\n"
+                "python refresh_index_history.py 실행 후 커밋")
+
+    # 아직 안 났지만 곧 날 상황인지.
+    history = _load_index_history()
+    if history.empty:
+        return ""
+    age = (pd.Timestamp.now().normalize() - history.index[-1]).days
+    if age >= HISTORY_STALE_DAYS:
+        return ("\n\n<b>⚠ 지수 거래량 이력 갱신 필요</b>\n"
+                f"마지막 {history.index[-1].date()} · {age}일 지남 "
+                f"(네이버가 덮는 한계는 약 155일)\n"
+                "python refresh_index_history.py 실행 후 커밋")
+    return ""
 
 
 def _merge_verified_history(history: pd.DataFrame, verified: pd.DataFrame) -> pd.DataFrame:
@@ -771,8 +807,11 @@ def build_message(d: pd.DataFrame, signal_today: str, prices: dict = None) -> st
         except Exception as exc:  # noqa: BLE001 - 판정 실패가 알림을 막으면 안 된다
             log.warning(f"FTD 판정 생략: {exc}")
 
+    # 이력 갱신 안내는 링크 바로 위에 둔다. 평소에는 빈 문자열이라 보이지 않는다.
+    upkeep = index_history_note(d)
+
     link = (f"\n\n상세 ▸ {CONFIG['PAGES_URL']}{CONFIG['FTD_PAGE']}?as_of={date_str}")
-    return head + body + track + ref + ftd_block + link
+    return head + body + track + ref + ftd_block + upkeep + link
 
 
 def build_test_message(message: str) -> str:
