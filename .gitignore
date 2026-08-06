@@ -10,3 +10,18 @@ output/
 
 __pycache__/
 *.pyc
+
+# KIS 수집 저장소 (원본 데이터는 커밋하지 않는다)
+data/*.sqlite
+data/*.sqlite-wal
+data/*.sqlite-shm
+
+# 참고 자료와 작업 중 산출물. 저장소에 둘 이유가 없고 용량만 크다.
+data/*.pdf
+data/krx_kospi_panel.csv
+download/
+tmp/
+
+# data/kospi_index_history.csv 는 예외로 커밋한다.
+# 지수 거래량 이력이 있어야 FTD를 판정할 수 있고, 이걸 두면 주문 권한이 있는
+# KIS 키를 CI에 넣지 않아도 된다.
