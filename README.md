@@ -253,11 +253,8 @@ python krx_foreign_flow_panel.py
 
 공식 KRX 자료를 정규화한 뒤 연구/검증/최종 홀드아웃 경계를 실행 전에 고정합니다.
 
-과거 패널은 KRX 계정 정보를 환경변수로 설정한 터미널에서 중단 후 재개 방식으로 수집합니다.
-
-```powershell
-python download_krx_foreign_flow_panel.py --start 2018-01-02 --end 2026-08-03
-```
+과거 패널 수집기는 pykrx에 기대고 있어 제거했습니다. 입력은 공식 KRX 자료를 직접
+정규화하거나, `collect_kis_flow.py`로 모은 `data/kis_panel.sqlite`에서 만들어 씁니다.
 
 ```powershell
 python krx_foreign_flow_panel.py `

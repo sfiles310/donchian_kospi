@@ -7,7 +7,6 @@
   https://github.com/koreainvestment/open-trading-api
 - KRX 자료가 필요하면 공식 KRX Open API만 사용한다.
 - `pykrx`, KRX 웹 엔드포인트 직접 호출, 스크래핑, 브라우저 자동화는 사용하지 않는다.
-  (`download_krx_foreign_flow_panel.py`는 이 규칙 이전에 만든 것이라 폐기 예정이다.)
 
 ## 인증과 호출
 

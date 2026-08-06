@@ -516,5 +516,6 @@ API가 상장 전 날짜에도 빈 행을 채워 보낸다(`0167A0` 투자자 �
 
 ## 폐기 예정
 
-- `download_krx_foreign_flow_panel.py` — pykrx 의존이라 저장소 규칙 위반. KIS로 대체.
-- `data/krx_kospi_panel.csv` — 2018년 94일만 수집된 미완성 자료.
+- `download_krx_foreign_flow_panel.py` — pykrx 의존이라 저장소 규칙 위반이었다.
+  2026-08-06 삭제했고 KIS 수집 계층이 대신한다.
+- `data/krx_kospi_panel.csv` — 2018년 94일만 수집된 미완성 자료. `.gitignore`로 제외.
