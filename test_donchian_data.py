@@ -3,6 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
+import numpy as np
 import pandas as pd
 
 import donchian_kospi_daily as app
@@ -68,20 +69,12 @@ class DashboardNotificationTest(unittest.TestCase):
         self.assertIn(expected, message)
 
     @patch.object(app, 'track_scenarios', return_value=[])
-    def test_ftd_block_only_when_holding_cash(self, _track):
+    def test_no_ftd_block_while_holding(self, _track):
         """보유 중이면 더 살 게 없으므로 FTD 판정을 붙이지 않는다."""
         data = app.compute_signals(sample_ohlc())
+        data.loc[data.index[-1], 'position'] = 1
 
-        holding = data.copy()
-        holding.loc[holding.index[-1], 'position'] = 1
-        self.assertNotIn('FTD 재진입 점검', app.build_message(holding, signal_today=None))
-
-        cash = data.copy()
-        cash.loc[cash.index[-1], 'position'] = 0
-        message = app.build_message(cash, signal_today=None)
-        # 조정 국면이 아니면 블록 자체가 안 나간다. 나가더라도 제목은 이 형태다.
-        if 'FTD' in message:
-            self.assertIn('FTD 재진입 점검', message)
+        self.assertNotIn('FTD 재진입 점검', app.build_message(data, signal_today=None))
 
     @patch.object(app.requests, 'get')
     def test_dashboard_date_must_match_notification_date(self, get):
@@ -116,3 +109,40 @@ class DashboardNotificationTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class IndexHistoryNoteTest(unittest.TestCase):
+    """지수 거래량 이력 갱신 안내. 평소에는 조용하고 필요할 때만 나와야 한다."""
+
+    def frame(self, volume=1000.0, rows=250):
+        index = pd.bdate_range('2026-01-01', periods=rows)
+        data = pd.DataFrame({'close': 2500.0, 'high': 2510.0, 'low': 2490.0,
+                             'open': 2500.0}, index=index)
+        if volume is not None:
+            data['volume'] = volume
+        return data
+
+    def test_quiet_when_history_is_fresh(self):
+        with patch.object(app, '_load_index_history') as load:
+            load.return_value = self.frame().tail(5)
+            self.assertEqual(app.index_history_note(self.frame()), '')
+
+    def test_warns_when_volume_column_missing(self):
+        note = app.index_history_note(self.frame(volume=None))
+        self.assertIn('거래량 자료가 없습니다', note)
+        self.assertIn('refresh_index_history.py', note)
+
+    def test_warns_when_volume_has_a_hole(self):
+        data = self.frame()
+        data.iloc[-100:-60, data.columns.get_loc('volume')] = np.nan
+        note = app.index_history_note(data)
+        self.assertIn('끊겼습니다', note)
+        self.assertIn('40일 결측', note)
+
+    def test_warns_before_the_hole_opens(self):
+        stale = self.frame()
+        stale.index = pd.bdate_range('2025-01-01', periods=len(stale))
+        with patch.object(app, '_load_index_history', return_value=stale):
+            note = app.index_history_note(self.frame())
+        self.assertIn('갱신 필요', note)
+        self.assertIn('refresh_index_history.py', note)

@@ -7,6 +7,9 @@
 이렇게 나눠 두는 이유는 주문 권한이 있는 KIS 키를 CI에 두지 않기 위해서다.
 GitHub Actions는 커밋된 CSV와 네이버만 쓴다.
 
+실행 주기: 5개월마다. 네이버가 110거래일만 주므로 그보다 오래 두면 거래량에
+구멍이 생긴다. 때가 되면 일일 알림 하단에 경고가 붙으므로 그때 돌리면 된다.
+
     python refresh_index_history.py            # 마지막 날짜 이후만 이어받기
     python refresh_index_history.py --full     # 2013년부터 다시 받기
 """

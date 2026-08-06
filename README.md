@@ -5,6 +5,26 @@
 
 ---
 
+## 🔁 정기 점검 — 5개월마다 (지수 거래량 이력)
+
+FTD 판정에는 지수 거래량이 필요합니다. 네이버 일봉이 **최근 110거래일(약 5.2개월)**만
+주기 때문에, 그보다 오래된 구간은 `data/kospi_index_history.csv`가 채웁니다.
+이 파일이 5개월 넘게 낡으면 두 구간 사이에 구멍이 생겨 FTD 판정 구간이 줄어듭니다.
+
+```powershell
+python refresh_index_history.py
+git add data/kospi_index_history.csv
+git commit -m "지수 거래량 이력 갱신"
+```
+
+`KIS_APP_KEY`, `KIS_APP_SECRET` 환경변수가 필요합니다. 로컬에서만 실행하며
+GitHub Actions는 이 키를 쓰지 않습니다.
+
+> 잊어도 됩니다. 갱신할 때가 되면 **매일 알림 하단에 경고가 붙습니다.**
+> 구멍이 실제로 생기기 전에 먼저 알리고, 생긴 뒤에는 어디가 비었는지까지 알려줍니다.
+
+---
+
 ## 📂 파일 구성
 
 | 파일 | 용도 |
