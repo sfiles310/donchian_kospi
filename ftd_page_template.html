@@ -88,7 +88,8 @@
   .panel { background: var(--surface); border: 1px solid var(--line);
     padding: 14px 8px 8px; }
   .scroller { overflow-x: auto; }
-  svg { display: block; width: 100%; height: auto; min-width: 660px; }
+  /* 좁은 화면에서는 viewBox를 줄여 그린다. 가로 스크롤을 시키지 않는다. */
+  svg { display: block; width: 100%; height: auto; }
   /* 범례 아이콘은 차트가 실제로 그리는 도형과 같은 SVG로 만든다.
      CSS로 흉내 내면 채운 원과 빈 원처럼 갈리는 곳에서 어긋난다. */
   .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12.5px;
@@ -117,7 +118,7 @@
   .case-note { font-size: 13px; color: var(--muted); }
   .case-edge { font-size: 20px; font-weight: 660; color: var(--up); }
 
-  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 640px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
   th, td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--line); }
   th { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
     color: var(--muted); font-weight: 600; }
@@ -133,6 +134,39 @@
   .notes b { color: var(--ink); font-weight: 620; }
   footer { font-size: 12.5px; color: var(--faint); border-top: 1px solid var(--line);
     padding-top: 16px; }
+
+  /* ── 좁은 화면 ─────────────────────────────────────────────────
+     알림 링크를 대부분 휴대폰에서 연다. 가로 스크롤 없이 읽히는 것이 우선이다. */
+  @media (max-width: 640px) {
+    body { font-size: 15px; }
+    .wrap { padding: 24px 14px 48px; gap: 26px; }
+    h1 { font-size: 23px; }
+    .sub { font-size: 14px; }
+    .chips { gap: 6px; }
+    .chip { padding: 4px 8px; font-size: 12.5px; }
+    .tiles { grid-template-columns: repeat(2, 1fr); }
+    .tile { padding: 12px 13px; }
+    .tile-value { font-size: 20px; }
+    .tile-note { font-size: 11.5px; }
+    .tile:last-child:nth-child(odd) { grid-column: 1 / -1; }
+    .cases { grid-template-columns: 1fr; }
+    .panel { padding: 10px 4px 4px; }
+    .legend { gap: 5px 12px; font-size: 12px; padding: 8px 6px 2px; }
+    section { gap: 11px; }
+
+    /* 표는 가로로 밀지 않고 카드처럼 세로로 쌓는다. */
+    table thead { display: none; }
+    table, table tbody, table tr, table td { display: block; width: 100%; }
+    table tr { border: 1px solid var(--line); padding: 10px 12px; margin-bottom: 8px; }
+    table tr.is-now { border-color: var(--accent); }
+    table td { border: none; padding: 3px 0; text-align: right;
+      display: flex; justify-content: space-between; gap: 12px; }
+    table td::before { content: attr(data-label); color: var(--muted);
+      font-size: 12px; text-align: left; }
+    table td:first-child { font-weight: 660; font-size: 15px;
+      padding-bottom: 7px; margin-bottom: 5px; border-bottom: 1px solid var(--line); }
+    table td:first-child::before { content: none; }
+  }
 </style>
 
 <div class="wrap">
@@ -276,18 +310,40 @@ function renderLegend() {
 }
 
 /* 연속된 조건 구간을 배경 띠로 그린다. */
-function bands(svg, key, fill, x, top, height) {
+function bands(svg, rows, key, fill, x, top, height) {
   let start = null;
-  DATA.forEach((row, i) => {
+  rows.forEach((row, i) => {
     const on = !!row[key];
     if (on && start === null) start = i;
-    if ((!on || i === DATA.length - 1) && start !== null) {
+    if ((!on || i === rows.length - 1) && start !== null) {
       const end = on ? i : i - 1;
       el("rect", { x: x(start) - x.step / 2, y: top,
         width: x.step * (end - start + 1), height, fill }, svg);
       start = null;
     }
   });
+}
+
+/* 좁은 화면에서는 viewBox를 줄이고 표시 구간도 짧게 잡는다. viewBox가 작아지면
+   같은 font-size가 화면에서 더 크게 보이므로 글자를 따로 키울 필요가 없다. */
+function layout() {
+  const narrow = window.matchMedia('(max-width: 640px)').matches;
+  return {
+    narrow,
+    rows: narrow ? DATA.slice(-70) : DATA,
+    main: narrow ? { w: 520, h: 330, L: 46, R: 512, T: 30, B: 288 }
+                 : { w: 1000, h: 420, L: 62, R: 986, T: 34, B: 376 },
+    bar: narrow ? { w: 520, h: 128, L: 46, R: 512, T: 10, B: 98 }
+                : { w: 1000, h: 150, L: 62, R: 986, T: 12, B: 116 },
+    tick: narrow ? 10 : 14,
+  };
+}
+
+function reset(id, box) {
+  const svg = document.getElementById(id);
+  svg.replaceChildren();
+  svg.setAttribute('viewBox', `0 0 ${box.w} ${box.h}`);
+  return svg;
 }
 
 function scaleX(count, left, right) {
@@ -297,16 +353,17 @@ function scaleX(count, left, right) {
   return f;
 }
 
-function drawMain() {
-  const svg = document.getElementById("main");
-  const [L, R, T, B] = [62, 986, 34, 376];
-  const x = scaleX(DATA.length, L, R);
-  const lo = Math.min(...DATA.map((r) => Math.min(r.low, r.dc_low))) * 0.985;
-  const hi = Math.max(...DATA.map((r) => Math.max(r.high, r.dc_high))) * 1.015;
+function drawMain(view) {
+  const rows = view.rows;
+  const { L, R, T, B } = view.main;
+  const svg = reset("main", view.main);
+  const x = scaleX(rows.length, L, R);
+  const lo = Math.min(...rows.map((r) => Math.min(r.low, r.dc_low))) * 0.985;
+  const hi = Math.max(...rows.map((r) => Math.max(r.high, r.dc_high))) * 1.015;
   const y = (v) => T + (hi - v) / (hi - lo) * (B - T);
 
-  bands(svg, "in_correction", "var(--shade)", x, T, B - T);
-  bands(svg, "in_window", "var(--accent-soft)", x, T, B - T);
+  bands(svg, rows, "in_correction", "var(--shade)", x, T, B - T);
+  bands(svg, rows, "in_window", "var(--accent-soft)", x, T, B - T);
 
   const step = (hi - lo) / 5;
   for (let i = 0; i <= 5; i++) {
@@ -316,13 +373,13 @@ function drawMain() {
     text(svg, L - 9, y(v) + 4, fmt(v), { "text-anchor": "end" });
   }
 
-  DATA.forEach((r, i) => {
+  rows.forEach((r, i) => {
     el("line", { x1: x(i), x2: x(i), y1: y(r.high), y2: y(r.low),
       stroke: "var(--band)", "stroke-width": Math.max(1.6, x.step * 0.48) }, svg);
   });
 
   const path = (key, stroke, width, dash) => {
-    const d = DATA.map((r, i) =>
+    const d = rows.map((r, i) =>
       `${i ? "L" : "M"}${x(i).toFixed(1)} ${y(r[key]).toFixed(1)}`).join(" ");
     const p = el("path", { d, fill: "none", stroke, "stroke-width": width,
       "stroke-linejoin": "round" }, svg);
@@ -359,12 +416,12 @@ function drawMain() {
   /* 4월 사례: FTD 진입과 돈치안 진입 사이 구간을 묶어 차이를 보여준다. */
   const winner = S.events.find((e) => e.lagDays);
   if (winner) {
-    const a = DATA.findIndex((r) => r.date === winner.date);
-    const b = DATA.findIndex((r) => r.dc_buy && r.date > winner.date);
+    const a = rows.findIndex((r) => r.date === winner.date);
+    const b = rows.findIndex((r) => r.dc_buy && r.date > winner.date);
     if (a >= 0 && b > a) {
-      const top = Math.max(T + 16, Math.min(y(DATA[a].close), y(DATA[b].close)) - 44);
+      const top = Math.max(T + 16, Math.min(y(rows[a].close), y(rows[b].close)) - 44);
       el("path", {
-        d: `M${x(a)} ${y(DATA[a].close) - 9} L${x(a)} ${top} L${x(b)} ${top} L${x(b)} ${y(DATA[b].close) - 9}`,
+        d: `M${x(a)} ${y(rows[a].close) - 9} L${x(a)} ${top} L${x(b)} ${top} L${x(b)} ${y(rows[b].close) - 9}`,
         fill: "none", stroke: "var(--up)", "stroke-width": 1.3, opacity: 0.75,
       }, svg);
       const caption = `${winner.lagDays}거래일 먼저 · ${signed(winner.edgePct, 1)}% 싸게`;
@@ -377,7 +434,7 @@ function drawMain() {
     }
   }
 
-  DATA.forEach((r, i) => {
+  rows.forEach((r, i) => {
     if (r.dc_sell) {
       MARKERS.sell(svg, x(i), y(r.close));
       callout(x(i), y(r.close), "매도", "var(--down)", -1);
@@ -392,37 +449,38 @@ function drawMain() {
     }
   });
 
-  const li = DATA.length - 1;
-  el("line", { x1: x(li), x2: x(li), y1: y(DATA[li].close), y2: y(DATA[li].dc_high),
+  const li = rows.length - 1;
+  el("line", { x1: x(li), x2: x(li), y1: y(rows[li].close), y2: y(rows[li].dc_high),
     stroke: "var(--accent)", "stroke-width": 1.4, "stroke-dasharray": "3 3" }, svg);
-  text(svg, x(li) - 9, (y(DATA[li].close) + y(DATA[li].dc_high)) / 2,
+  text(svg, x(li) - 9, (y(rows[li].close) + y(rows[li].dc_high)) / 2,
     signed(S.gapToEntry, 1) + "%", { "text-anchor": "end", fill: "var(--accent)",
       "font-size": 12, "font-weight": 700, halo: true });
-  MARKERS.today(svg, x(li), y(DATA[li].close));
-  callout(x(li), y(DATA[li].close), "오늘", "var(--accent)", 1);
+  MARKERS.today(svg, x(li), y(rows[li].close));
+  callout(x(li), y(rows[li].close), "오늘", "var(--accent)", 1);
 
-  axis(svg, x, B);
+  axis(svg, rows, x, B, view.tick);
 }
 
-function axis(svg, x, B) {
-  DATA.forEach((r, i) => {
-    if (i % 14 && i !== DATA.length - 1) return;
+function axis(svg, rows, x, B, every) {
+  rows.forEach((r, i) => {
+    if (i % every && i !== rows.length - 1) return;
     text(svg, x(i), B + 20, r.date.slice(5), { "text-anchor": "middle" });
   });
 }
 
-function drawBars(id, key, threshold, unit, zeroBase) {
-  const svg = document.getElementById(id);
-  const [L, R, T, B] = [62, 986, 12, 116];
-  const x = scaleX(DATA.length, L, R);
-  const values = DATA.map((r) => r[key]).filter((v) => v != null);
+function drawBars(id, view, key, threshold, unit, zeroBase) {
+  const rows = view.rows;
+  const { L, R, T, B } = view.bar;
+  const svg = reset(id, view.bar);
+  const x = scaleX(rows.length, L, R);
+  const values = rows.map((r) => r[key]).filter((v) => v != null);
   const hi = Math.max(threshold * 1.2, ...values) * 1.06;
   const lo = zeroBase ? 0 : Math.min(0, ...values) * 1.12;
   const y = (v) => T + (hi - v) / (hi - lo) * (B - T);
 
-  bands(svg, "in_window", "var(--accent-soft)", x, T, B - T);
+  bands(svg, rows, "in_window", "var(--accent-soft)", x, T, B - T);
   const base = y(0);
-  DATA.forEach((r, i) => {
+  rows.forEach((r, i) => {
     const v = r[key];
     if (v == null) return;
     const ok = v >= threshold;
@@ -437,13 +495,13 @@ function drawBars(id, key, threshold, unit, zeroBase) {
     "stroke-width": 1 }, svg);
   el("line", { x1: L, x2: R, y1: y(threshold), y2: y(threshold), stroke: "var(--accent)",
     "stroke-width": 1.4, "stroke-dasharray": "5 3" }, svg);
-  text(svg, L - 9, y(threshold) + 4, threshold + unit, { "text-anchor": "end",
+  text(svg, L - 7, y(threshold) + 4, threshold + unit, { "text-anchor": "end",
     fill: "var(--accent)", "font-weight": 700 });
-  DATA.forEach((r, i) => {
+  rows.forEach((r, i) => {
     if (r.ftd) text(svg, x(i), T + 10, "▲", { "text-anchor": "middle",
       fill: "var(--up)", "font-size": 10 });
   });
-  axis(svg, x, B);
+  axis(svg, rows, x, B, view.tick);
 }
 
 function renderChips() {
@@ -524,11 +582,19 @@ function renderTable() {
   const body = rows.map((r) => {
     const now = r.date === S.asOf ? ' class="is-now"' : "";
     const mark = (ok) => ok ? '<span class="pass">통과</span>' : '<span class="fail">미달</span>';
-    return `<tr${now}><td class="num">${r.date}</td><td class="num">${r.rally_day}</td>` +
-      `<td class="num">${fmt(r.close, 2)}</td><td class="num">${signed(r.gain, 2)}%</td>` +
-      `<td>${mark(r.gain_ok)}</td><td class="num">${fmt(r.vol_ratio, 2)}배</td>` +
-      `<td>${mark(r.volume_ok)}</td>` +
-      `<td>${r.ftd ? '<span class="pass">FTD 확정</span>' : '<span class="fail">아님</span>'}</td></tr>`;
+    const cell = (label, value, cls) =>
+      `<td data-label="${label}"${cls ? ` class="${cls}"` : ""}>${value}</td>`;
+    return `<tr${now}` + `>` +
+      cell("일자", r.date, "num") +
+      cell("랠리 일차", `${r.rally_day}일차`, "num") +
+      cell("종가", fmt(r.close, 2), "num") +
+      cell("상승률", `${signed(r.gain, 2)}%`, "num") +
+      cell("조건 ① 상승", mark(r.gain_ok)) +
+      cell("거래량 배수", `${fmt(r.vol_ratio, 2)}배`, "num") +
+      cell("조건 ② 거래량", mark(r.volume_ok)) +
+      cell("판정", r.ftd ? '<span class="pass">FTD 확정</span>'
+                        : '<span class="fail">아님</span>') +
+      `</tr>`;
   }).join("");
   document.getElementById("judge").innerHTML = head + "<tbody>" + body + "</tbody>";
 }
@@ -563,14 +629,26 @@ function renderFoot() {
     ` 참고용 화면이며 매매 권유가 아니다.`;
 }
 
+function drawCharts() {
+  const view = layout();
+  drawMain(view);
+  drawBars("gain", view, "gain", 2.0, "%", false);
+  drawBars("vol", view, "vol_ratio", 1.0, "배", true);
+}
+
 renderChips();
 renderTiles();
 renderCases();
 renderLegend();
-drawMain();
-drawBars("gain", "gain", 2.0, "%", false);
-drawBars("vol", "vol_ratio", 1.0, "배", true);
 renderTable();
 renderNotes();
 renderFoot();
+drawCharts();
+
+/* 화면을 돌리거나 창을 바꾸면 규격을 다시 잡는다. 연속 호출은 한 번으로 묶는다. */
+let redrawTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(redrawTimer);
+  redrawTimer = setTimeout(drawCharts, 150);
+});
 </script>
