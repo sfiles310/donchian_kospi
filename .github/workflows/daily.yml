@@ -45,8 +45,13 @@ jobs:
         run: |
           mkdir -p _site
           cp output/dashboard.html _site/index.html
-          # 알림 하단 링크가 가리키는 FTD 재진입 점검 화면
-          cp output/ftd.html _site/ftd.html
+          # FTD 화면은 부가 기능이다. 생성에 실패했다고 대시보드 배포와 알림까지
+          # 막으면 안 되므로 없으면 경고만 남기고 넘어간다.
+          if [ -f output/ftd.html ]; then
+            cp output/ftd.html _site/ftd.html
+          else
+            echo "::warning::output/ftd.html 이 없어 FTD 화면을 배포하지 않습니다"
+          fi
 
       - uses: actions/upload-pages-artifact@v3
         with:
