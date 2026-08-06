@@ -136,6 +136,31 @@ class AlertBlockTest(unittest.TestCase):
         self.assertIn('거래량 미달', block)
         self.assertIn('판정창', block)
 
+    def test_expired_window_is_not_called_a_waiting_period(self) -> None:
+        # 창을 넘긴 상태를 관망기로 표시하면 곧 판정될 것처럼 읽힌다.
+        frame = falling_then_rally(rally=[2000 + i * 3 for i in range(1, 14)])
+        state = ftd_signal.current_state(frame)
+        self.assertGreater(state.rally_day, ftd_signal.LAST_TEST_DAY)
+        self.assertFalse(state.in_window)
+        self.assertEqual(state.days_left, 0)
+
+        block = ftd_signal.format_alert_block(state, 2500, 2039)
+        self.assertIn('판정창 종료', block)
+        self.assertNotIn('관망기', block)
+
+    def test_waiting_period_still_says_waiting(self) -> None:
+        frame = falling_then_rally(rally=[2010, 2020])
+        state = ftd_signal.current_state(frame)
+        self.assertLess(state.rally_day, ftd_signal.FIRST_TEST_DAY)
+        self.assertIn('관망기', ftd_signal.format_alert_block(state, 2500, 2020))
+
+    def test_new_low_reopens_the_window(self) -> None:
+        # 창이 닫혀도 저점이 새로 나오면 처음부터 다시 센다.
+        rally = [2000 + i * 3 for i in range(1, 13)] + [1950, 1960, 1970, 1980]
+        table = ftd_signal.compute_ftd(falling_then_rally(rally=rally))
+        self.assertEqual(table['rally_day'].tolist()[-4:], [1, 2, 3, 4])
+        self.assertTrue(table['in_window'].iloc[-1])
+
     def test_block_uses_cp949_safe_marks(self) -> None:
         # 윈도우 콘솔 로그가 인코딩 오류로 죽지 않아야 한다.
         frame = falling_then_rally(rally=[2010, 2020, 2030, 2100],

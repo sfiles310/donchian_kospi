@@ -157,7 +157,11 @@ def format_alert_block(state: FtdState, dc_high: float, close: float) -> str:
     lines.append(f"{mark(state.volume_ok)} 거래량 {state.volume_ratio:.2f}배 (기준 1.00배)")
     if state.in_window:
         lines.append(f"미확정 · {state.blocked_by} · 판정창 {state.days_left}일 남음")
-    elif state.rally_day:
+    elif state.rally_day and state.rally_day < FIRST_TEST_DAY:
         lines.append(f"관망기 ({FIRST_TEST_DAY}일차부터 판정)")
+    elif state.rally_day:
+        # 창을 넘기면 이번 반등 시도로는 판정하지 않는다. 저점이 새로 나와야
+        # 관망일이 1로 돌아가고 창이 다시 열린다. 그때까지는 돈치안만 본다.
+        lines.append(f"판정창 종료({LAST_TEST_DAY}일차) · 새 저점이 나와야 다시 판정")
     lines.append(f"돈치안 재진입선 {dc_high:,.0f} ({gap:+.1f}%)")
     return "\n".join(lines)

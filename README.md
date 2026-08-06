@@ -13,6 +13,10 @@
 | `dashboard_template.html` | HTML 대시보드 템플릿 (필수) |
 | `kis/` | KIS Open API 수집 계층 (인증·호출·정규화·저장) |
 | `collect_kis_flow.py` | KIS 수급 패널 수집기 진입점 |
+| `ftd_signal.py` | 오닐 FTD 재진입 판정 (알림·검증 공용) |
+| `ftd_page_template.html` | FTD 재진입 점검 화면 템플릿 |
+| `data/kospi_index_history.csv` | 지수 거래량 이력. FTD 판정에 필요 |
+| `refresh_index_history.py` | 위 이력 갱신 (로컬 전용, 몇 달에 한 번) |
 | `foreign_flow_validation.py` | 외국인 수급·환율 비교 검증 스크립트 |
 | `foreign_flow_dashboard_template.html` | 외국인 수급 검증 대시보드 템플릿 |
 | `run_donchian.bat` | 윈도우 자동 실행용 배치 파일 |
@@ -24,6 +28,7 @@
 | 파일 | 용도 |
 |---|---|
 | `output/dashboard.html` | 매일 갱신되는 대시보드 |
+| `output/ftd.html` | FTD 재진입 점검 화면. 알림 하단 링크가 가리킨다 |
 | `output/foreign_flow_validation.html` | 기존 차트와 분리된 외국인 수급 검증 화면 |
 | `output/foreign_flow_*.csv` | 결합 데이터·전략·조건·상관·검색 결과 |
 | `output/signals_log.csv` | 모든 매매 신호 이력 |
