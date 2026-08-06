@@ -324,18 +324,36 @@ function bands(svg, rows, key, fill, x, top, height) {
   });
 }
 
-/* 좁은 화면에서는 viewBox를 줄이고 표시 구간도 짧게 잡는다. viewBox가 작아지면
-   같은 font-size가 화면에서 더 크게 보이므로 글자를 따로 키울 필요가 없다. */
+/* 좁은 화면에서 표시할 구간.
+
+   최근 며칠만 자르면 FTD와 매매 신호가 창 밖으로 밀려난다. 이 화면의 요점이
+   "FTD가 언제 떴고 돈치안보다 얼마나 빨랐나"이므로 마커는 반드시 들어와야 한다.
+   그래서 가장 이른 마커를 기준으로 잡고, 마커가 없을 때만 최근 구간으로 줄인다. */
+const MOBILE_MIN_DAYS = 70;
+const MARKER_LEAD = 5;
+
+function narrowRows() {
+  const first = DATA.findIndex((r) => r.ftd || r.dc_buy || r.dc_sell);
+  const byRecent = Math.max(0, DATA.length - MOBILE_MIN_DAYS);
+  const start = first < 0 ? byRecent
+                          : Math.min(Math.max(0, first - MARKER_LEAD), byRecent);
+  return DATA.slice(start);
+}
+
+/* viewBox를 줄이면 같은 font-size가 화면에서 더 크게 보이므로 글자를 따로
+   키울 필요가 없다. */
 function layout() {
   const narrow = window.matchMedia('(max-width: 640px)').matches;
+  const rows = narrow ? narrowRows() : DATA;
   return {
     narrow,
-    rows: narrow ? DATA.slice(-70) : DATA,
+    rows,
+    // 눈금이 겹치지 않게 표시 행 수에 맞춰 간격을 정한다.
+    tick: Math.max(7, Math.ceil(rows.length / (narrow ? 7 : 11))),
     main: narrow ? { w: 520, h: 330, L: 46, R: 512, T: 30, B: 288 }
                  : { w: 1000, h: 420, L: 62, R: 986, T: 34, B: 376 },
     bar: narrow ? { w: 520, h: 128, L: 46, R: 512, T: 10, B: 98 }
                 : { w: 1000, h: 150, L: 62, R: 986, T: 12, B: 116 },
-    tick: narrow ? 10 : 14,
   };
 }
 
