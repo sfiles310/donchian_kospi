@@ -45,6 +45,8 @@ jobs:
         run: |
           mkdir -p _site
           cp output/dashboard.html _site/index.html
+          # 알림 하단 링크가 가리키는 FTD 재진입 점검 화면
+          cp output/ftd.html _site/ftd.html
 
       - uses: actions/upload-pages-artifact@v3
         with:
