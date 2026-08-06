@@ -64,7 +64,24 @@ class DashboardNotificationTest(unittest.TestCase):
 
         message = app.build_message(data, signal_today=None)
 
-        self.assertIn(f"{app.CONFIG['PAGES_URL']}?as_of={date}", message)
+        expected = f"{app.CONFIG['PAGES_URL']}{app.CONFIG['FTD_PAGE']}?as_of={date}"
+        self.assertIn(expected, message)
+
+    @patch.object(app, 'track_scenarios', return_value=[])
+    def test_ftd_block_only_when_holding_cash(self, _track):
+        """보유 중이면 더 살 게 없으므로 FTD 판정을 붙이지 않는다."""
+        data = app.compute_signals(sample_ohlc())
+
+        holding = data.copy()
+        holding.loc[holding.index[-1], 'position'] = 1
+        self.assertNotIn('FTD 재진입 점검', app.build_message(holding, signal_today=None))
+
+        cash = data.copy()
+        cash.loc[cash.index[-1], 'position'] = 0
+        message = app.build_message(cash, signal_today=None)
+        # 조정 국면이 아니면 블록 자체가 안 나간다. 나가더라도 제목은 이 형태다.
+        if 'FTD' in message:
+            self.assertIn('FTD 재진입 점검', message)
 
     @patch.object(app.requests, 'get')
     def test_dashboard_date_must_match_notification_date(self, get):

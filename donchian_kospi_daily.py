@@ -23,6 +23,8 @@ import numpy as np
 import pandas as pd
 import requests
 
+import ftd_signal
+
 # ─────────────────────────────────────────────────────────────────
 # 설정 (사용자가 수정해야 할 부분)
 # ─────────────────────────────────────────────────────────────────
@@ -66,6 +68,10 @@ CONFIG = {
 
     # 대시보드 주소 (알림 하단 링크)
     'PAGES_URL': 'https://sfiles310.github.io/donchian_kospi/',
+    # FTD 재진입 점검 화면. 알림 링크는 이쪽을 가리킨다.
+    'FTD_PAGE': 'ftd.html',
+    # FTD 화면에 그릴 구간 길이. 거래량 이력을 커밋해 두어 이 구간 전체를 판정할 수 있다.
+    'FTD_PAGE_DAYS': 145,
 }
 
 # ─────────────────────────────────────────────────────────────────
@@ -121,17 +127,21 @@ def _fetch_naver_chart(code: str, kind: str = 'index') -> pd.DataFrame:
     )
     r.raise_for_status()
     rows = r.json().get('priceInfos', [])
+    # 거래량은 FTD 판정에 필요하다. 지수 응답에는 accumulatedTradingVolume으로 온다.
     df = pd.DataFrame([{
         'date': x['localDate'],
         'open': x['openPrice'],
         'high': x['highPrice'],
         'low': x['lowPrice'],
         'close': x['closePrice'],
+        'volume': x.get('accumulatedTradingVolume'),
     } for x in rows])
     if df.empty:
         raise RuntimeError(f"네이버 {code} 일봉 데이터가 비어 있습니다.")
     df['date'] = pd.to_datetime(df['date'])
     df = df.set_index('date').astype(float).sort_index()
+    if df['volume'].isna().all():
+        df = df.drop(columns=['volume'])
     _validate_ohlc(df, f"네이버 {code}")
     return df
 
@@ -170,6 +180,42 @@ def _fetch_closed_kospi_data() -> pd.DataFrame:
     return chart
 
 
+INDEX_HISTORY_CSV = SCRIPT_DIR / 'data' / 'kospi_index_history.csv'
+
+
+def _load_index_history() -> pd.DataFrame:
+    """저장소에 커밋해 둔 지수 일봉 이력.
+
+    네이버 일봉은 110일에서 끊겨 거래량 50일 이동평균을 빼면 판정 구간이 60일밖에
+    안 남는다. 과거 이력은 변하지 않으므로 한 번 받아 파일로 두고 최근 구간만
+    네이버로 잇는다. KIS Open API에서 받은 값이며 겹치는 109일에서 네이버와
+    종가 오차 0, 거래량 오차 최대 1로 일치하는 것을 확인했다(2026-08-06).
+    이렇게 하면 주문 권한이 있는 API 키를 CI에 두지 않아도 된다.
+    """
+    if not INDEX_HISTORY_CSV.exists():
+        log.warning(f"{INDEX_HISTORY_CSV.name}이 없습니다. 거래량 이력 없이 진행합니다.")
+        return pd.DataFrame()
+    frame = pd.read_csv(INDEX_HISTORY_CSV)
+    frame['date'] = pd.to_datetime(frame['date'])
+    frame = frame.set_index('date').sort_index()
+    _validate_ohlc(frame, "커밋된 지수 이력")
+    return frame
+
+
+def _attach_volume_history(merged: pd.DataFrame) -> pd.DataFrame:
+    """검증 시세가 못 덮는 과거 구간의 거래량을 커밋된 이력에서 채운다."""
+    history = _load_index_history()
+    if history.empty or 'volume' not in history.columns:
+        return merged
+    if 'volume' not in merged.columns:
+        merged['volume'] = np.nan
+    filled = merged['volume'].fillna(history['volume'].reindex(merged.index))
+    merged = merged.assign(volume=filled)
+    covered = int(merged['volume'].notna().sum())
+    log.info(f"거래량 이력 결합: {covered}/{len(merged)}행")
+    return merged
+
+
 def _merge_verified_history(history: pd.DataFrame, verified: pd.DataFrame) -> pd.DataFrame:
     """최근 구간은 교차검증된 시세로 덮어써 차트의 오래된 캐시를 제거한다."""
     if len(verified) < 60:
@@ -178,12 +224,19 @@ def _merge_verified_history(history: pd.DataFrame, verified: pd.DataFrame) -> pd
     if len(overlap) < 60:
         raise RuntimeError(f"기본 시세와 검증 시세의 공통 구간이 부족합니다: {len(overlap)}행")
 
-    changed = (history.loc[overlap] - verified.loc[overlap]).abs().gt(0.001).any(axis=1)
+    # 가격만 대조한다. 거래량은 출처마다 집계 기준이 달라 여기서 따질 값이 아니다.
+    ohlc = ['open', 'high', 'low', 'close']
+    changed = (history.loc[overlap, ohlc] - verified.loc[overlap, ohlc]).abs().gt(0.001).any(axis=1)
     if changed.any():
         dates = ', '.join(overlap[changed].strftime('%Y-%m-%d'))
         log.warning(f"기본 시세 불일치 {int(changed.sum())}건을 검증 시세로 교정: {dates}")
 
-    merged = pd.concat([history.loc[history.index < verified.index[0]], verified]).sort_index()
+    older = history.loc[history.index < verified.index[0]].copy()
+    # 거래량은 검증 시세 쪽만 쓴다. 출처마다 단위가 다르다(네이버 천주, FDR 주).
+    # 섞으면 50일 이동평균이 경계에서 1000배 튀어 FTD 판정이 무너진다.
+    if 'volume' in older.columns:
+        older = older.drop(columns=['volume'])
+    merged = pd.concat([older, verified]).sort_index()
     _validate_ohlc(merged, "병합 코스피")
     return merged
 
@@ -214,7 +267,8 @@ def fetch_kospi_data(days: int = 400) -> pd.DataFrame:
             elif '종' in c or 'close' in c.lower(): col_map[c] = 'close'
             elif '거래량' in c or 'volume' in c.lower(): col_map[c] = 'volume'
         df = df.rename(columns=col_map)
-        df = df[['open','high','low','close']].astype(float)
+        keep = [c for c in ['open','high','low','close','volume'] if c in df.columns]
+        df = df[keep].astype(float)
         df.index = pd.to_datetime(df.index)
         df = df.sort_index()
         log.info(f"pykrx 수집 완료: {len(df)}행 ({df.index[0].date()} ~ {df.index[-1].date()})")
@@ -231,8 +285,9 @@ def fetch_kospi_data(days: int = 400) -> pd.DataFrame:
                                 start.strftime('%Y-%m-%d'),
                                 end.strftime('%Y-%m-%d'))
             df.columns = [c.lower() for c in df.columns]
-            df = df[['open','high','low','close']].astype(float)
-            df = df.dropna().sort_index()
+            keep = [c for c in ['open','high','low','close','volume'] if c in df.columns]
+            df = df[keep].astype(float)
+            df = df.dropna(subset=['open','high','low','close']).sort_index()
             log.info(f"FDR 수집 완료: {len(df)}행")
         except Exception as e:
             log.error(f"모든 데이터 소스 실패: {e}")
@@ -240,6 +295,7 @@ def fetch_kospi_data(days: int = 400) -> pd.DataFrame:
 
     verified = _fetch_closed_kospi_data()
     df = _merge_verified_history(df, verified)
+    df = _attach_volume_history(df)
     log.info(f"코스피 확정 시세 검증 완료: {df.index[-1].date()} 종가 {df['close'].iloc[-1]:,.2f}")
     return df
 
@@ -705,8 +761,18 @@ def build_message(d: pd.DataFrame, signal_today: str, prices: dict = None) -> st
         if p:
             ref += f"\n[미적용] {name} {p[0]:,.0f}"
 
-    link = f"\n\n상세 ▸ {CONFIG['PAGES_URL']}?as_of={date_str}"
-    return head + body + track + ref + link
+    # ── FTD 재진입 점검 ──────────────────────────────────────
+    # 현금일 때만 의미가 있다. 보유 중이면 더 살 게 없어 판정해도 쓸 데가 없다.
+    ftd_block = ""
+    if pos == 0:
+        try:
+            state = ftd_signal.current_state(d)
+            ftd_block = ftd_signal.format_alert_block(state, float(dch), float(close))
+        except Exception as exc:  # noqa: BLE001 - 판정 실패가 알림을 막으면 안 된다
+            log.warning(f"FTD 판정 생략: {exc}")
+
+    link = (f"\n\n상세 ▸ {CONFIG['PAGES_URL']}{CONFIG['FTD_PAGE']}?as_of={date_str}")
+    return head + body + track + ref + ftd_block + link
 
 
 def build_test_message(message: str) -> str:
@@ -716,6 +782,97 @@ def build_test_message(message: str) -> str:
 # ─────────────────────────────────────────────────────────────────
 # HTML 대시보드 생성
 # ─────────────────────────────────────────────────────────────────
+def render_ftd_page(d: pd.DataFrame) -> Path:
+    """FTD 재진입 점검 화면. 알림 하단 링크가 가리키는 페이지다."""
+    template_path = SCRIPT_DIR / 'ftd_page_template.html'
+    if not template_path.exists():
+        raise FileNotFoundError(f"{template_path.name}이 없습니다.")
+
+    frame = d.dropna(subset=['dc_high', 'dc_low']).tail(CONFIG['FTD_PAGE_DAYS']).copy()
+    table = ftd_signal.compute_ftd(d).reindex(frame.index)
+    frame = frame.join(table[['in_correction', 'rally_day', 'rally_low', 'gain',
+                              'volume_ratio', 'in_window', 'gain_ok',
+                              'volume_ok', 'ftd']])
+    frame['dc_buy'] = frame['position'].diff() == 1
+    frame['dc_sell'] = frame['position'].diff() == -1
+
+    def clean(value, digits=2):
+        if value is None or (isinstance(value, float) and not np.isfinite(value)):
+            return None
+        return round(float(value), digits)
+
+    rows = []
+    for idx, row in frame.iterrows():
+        rows.append({
+            'date': idx.strftime('%Y-%m-%d'),
+            'open': clean(row.get('open')), 'high': clean(row['high']),
+            'low': clean(row['low']), 'close': clean(row['close']),
+            'volume': clean(row.get('volume'), 0),
+            'dc_high': clean(row['dc_high']), 'dc_low': clean(row['dc_low']),
+            'in_correction': bool(row['in_correction']),
+            'rally_day': int(row['rally_day']),
+            'rally_low': clean(row['rally_low']),
+            'gain': clean(row['gain']),
+            'vol_ratio': clean(row['volume_ratio'], 3),
+            'in_window': bool(row['in_window']),
+            'gain_ok': bool(row['gain_ok']),
+            'volume_ok': bool(row['volume_ok']),
+            'ftd': bool(row['ftd']),
+            'dc_buy': bool(row['dc_buy']), 'dc_sell': bool(row['dc_sell']),
+        })
+
+    # FTD가 실제로 이득이 됐는지: 그 뒤 돈치안이 언제 얼마에 들어갔는지와 비교한다.
+    events = []
+    for i, row in enumerate(rows):
+        if not row['ftd']:
+            continue
+        later = next((j for j in range(i + 1, len(rows)) if rows[j]['dc_buy']), None)
+        held = bool(frame['position'].iloc[i] == 1)
+        if held:
+            note, lag, edge = '이미 보유 중 (효과 없음)', None, None
+        elif later is not None:
+            lag = later - i
+            edge = (rows[later]['close'] / row['close'] - 1) * 100
+            note = f"돈치안은 {rows[later]['date']}에 진입"
+        else:
+            note, lag, edge = '이후 돈치안 진입 없음', None, None
+        events.append({
+            'date': row['date'], 'close': row['close'], 'rallyDay': row['rally_day'],
+            'gain': row['gain'], 'volRatio': row['vol_ratio'],
+            'note': note, 'lagDays': lag, 'edgePct': clean(edge),
+        })
+
+    last = rows[-1]
+    judged = [r['date'] for r in rows if r['vol_ratio'] is not None]
+    sells = [r for r in rows if r['dc_sell']]
+    sell = sells[-1] if sells else rows[0]
+    after_sell = [r for r in rows if r['date'] >= sell['date']]
+    low_row = min(after_sell, key=lambda r: r['low'])
+    corrections = [r['date'] for r in rows if r['in_correction']]
+    summary = {
+        'asOf': last['date'], 'start': rows[0]['date'], 'days': len(rows),
+        'close': last['close'], 'dcHigh': last['dc_high'],
+        'gapToEntry': clean((last['dc_high'] / last['close'] - 1) * 100),
+        'rallyDay': last['rally_day'], 'gain': last['gain'],
+        'volRatio': last['vol_ratio'],
+        'daysLeft': max(0, ftd_signal.LAST_TEST_DAY - last['rally_day']),
+        'correctionStart': corrections[0] if corrections else last['date'],
+        'sellDate': sell['date'], 'sellClose': sell['close'],
+        'lowDate': low_row['date'], 'lowValue': low_row['low'],
+        'dropFromPeak': clean((last['close'] / max(r['close'] for r in rows) - 1) * 100),
+        'judgeFrom': judged[0] if judged else None,
+        'events': events,
+    }
+
+    html = template_path.read_text(encoding='utf-8')
+    html = (html.replace('/*__DATA__*/', json.dumps(rows, ensure_ascii=False))
+                .replace('/*__SUMMARY__*/', json.dumps(summary, ensure_ascii=False)))
+    out_path = OUT_DIR / CONFIG['FTD_PAGE']
+    out_path.write_text(html, encoding='utf-8')
+    log.info(f"FTD 화면 생성: {out_path} ({len(rows)}행, FTD {len(events)}건)")
+    return out_path
+
+
 def render_dashboard(d: pd.DataFrame, signals: pd.DataFrame) -> Path:
     """최근 60일 데이터로 정적 HTML 대시보드 생성"""
     plot_df = d.dropna(subset=['dc_high','dc_low']).tail(60)
@@ -809,6 +966,10 @@ def main(force_notification: bool = False):
 
     # 5. HTML 대시보드 갱신
     dashboard_path = render_dashboard(d, signals)
+    try:
+        render_ftd_page(d)
+    except Exception as exc:  # noqa: BLE001 - 화면 실패가 알림을 막으면 안 된다
+        log.warning(f"FTD 화면 생성 실패: {exc}")
 
     # 6. 텔레그램 푸시 — 조건 충족일 또는 NOTIFY_ALWAYS=True
     prices = fetch_prices(CONFIG['MANAGED'] + CONFIG['REFERENCE'], last_date)

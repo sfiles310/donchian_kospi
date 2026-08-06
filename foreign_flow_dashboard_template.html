@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>외국인 수급 검증 대시보드</title>
+<style>
+  :root {
+    --bg:#0f0f1a; --card:#1a1a2e; --soft:#14142a; --border:#2d2d52;
+    --text:#eaeaf5; --muted:#9999bb; --dim:#6b6b8a;
+    --green:#00d28d; --red:#ff5577; --blue:#4d8cff; --amber:#ffaa33;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Malgun Gothic',sans-serif; }
+  .container { max-width:1280px; margin:auto; }
+  h1 { font-size:21px; margin:0 0 5px; font-weight:600; }
+  .updated,.note { color:var(--muted); font-size:12px; line-height:1.7; }
+  .notice { margin:20px 0; padding:14px 16px; background:rgba(255,170,51,.07);
+    border:1px solid rgba(255,170,51,.25); border-radius:10px; color:#ffd28a; font-size:13px; }
+  .section { margin-top:26px; }
+  .section-title { color:var(--muted); font-size:12px; letter-spacing:.08em;
+    text-transform:uppercase; margin-bottom:10px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; }
+  .label { color:var(--dim); font-size:11px; margin-bottom:7px; }
+  .value { font-size:21px; font-weight:600; }
+  .sub { color:var(--muted); font-size:11px; margin-top:5px; }
+  .green { color:var(--green); } .red { color:var(--red); } .amber { color:var(--amber); }
+  .chart { height:390px; padding:16px; background:var(--card); border:1px solid var(--border); border-radius:12px; }
+  .table-wrap { overflow:auto; background:var(--card); border:1px solid var(--border); border-radius:12px; }
+  table { width:100%; border-collapse:collapse; font-size:12px; white-space:nowrap; }
+  th { position:sticky; top:0; background:var(--soft); color:var(--dim); font-weight:500; text-align:right; }
+  th:first-child,td:first-child,th:nth-child(2),td:nth-child(2) { text-align:left; }
+  th,td { padding:10px 12px; border-bottom:1px solid var(--border); text-align:right; }
+  tr:last-child td { border-bottom:0; }
+  .badge { display:inline-block; padding:3px 8px; border-radius:20px; background:rgba(77,140,255,.12); color:#90b5ff; }
+  .tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+  button { border:1px solid var(--border); color:var(--muted); background:var(--soft);
+    border-radius:8px; padding:9px 12px; min-height:44px; cursor:pointer; }
+  button.active { color:var(--text); border-color:var(--blue); background:rgba(77,140,255,.13); }
+  button:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
+  .skip { position:absolute; left:-9999px; top:8px; padding:8px 12px; background:var(--text); color:var(--bg); z-index:10; }
+  .skip:focus { left:8px; }
+  @media (max-width:640px) {
+    body { padding:16px 12px; }
+    .chart { height:310px; padding:10px; }
+    th,td { padding:9px 10px; }
+  }
+  @media (prefers-reduced-motion:reduce) { * { scroll-behavior:auto !important; } }
+  .footer { color:var(--dim); text-align:center; font-size:11px; margin:34px 0 8px; }
+</style>
+</head>
+<body>
+<a class="skip" href="#main-content">본문으로 건너뛰기</a>
+<main class="container" id="main-content">
+  <h1>외국인 수급 비교·검증</h1>
+  <div id="updated" class="updated"></div>
+  <div class="notice">
+    외국인 수급은 장 마감 후 확정값으로 계산하고 신호는 다음 거래일에만 반영합니다.
+    상관관계는 인과관계가 아니며, 결과는 투자 권유가 아닌 가설 검증 자료입니다.
+  </div>
+
+  <div class="section">
+    <div class="section-title">Latest state</div>
+    <div id="latest" class="grid"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">가격 · 외국인 5일 매수강도</div>
+    <div class="chart"><canvas id="flowChart" role="img" aria-label="종가와 외국인 5일 매수강도 추이"></canvas></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">전략 비교 — 다음 날 시가 매수·종가 매도</div>
+    <div class="tabs" id="cost-tabs"></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>종목</th><th>전략</th><th>총수익</th><th>CAGR</th><th>MDD</th><th>Sharpe</th><th>거래일</th><th>승률</th><th>거래일 평균</th><th>CVaR 95%</th><th>최대 연패</th></tr></thead>
+      <tbody id="strategy-body"></tbody>
+    </table></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">조건별 이후 수익 — 외국인 가설 직접 비교</div>
+    <div class="tabs" id="horizon-tabs"></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>종목</th><th>조건</th><th>표본</th><th>평균수익</th><th>전체 대비</th><th>95% 신뢰구간</th><th>p값</th><th>FDR q값</th><th>상승확률</th></tr></thead>
+      <tbody id="condition-body"></tbody>
+    </table></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">외국인 5일 매수강도 분위별 이후 수익</div>
+    <div class="note">1분위는 상대적으로 강한 매도, 5분위는 상대적으로 강한 매수입니다.</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>종목</th><th>분위</th><th>기간</th><th>표본</th><th>평균수익</th><th>중앙값</th><th>상승확률</th></tr></thead>
+      <tbody id="quantile-body"></tbody>
+    </table></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">수치별 미래 5일 수익 상관</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>종목</th><th>변수</th><th>표본</th><th>Pearson</th><th>Spearman</th></tr></thead>
+      <tbody id="correlation-body"></tbody>
+    </table></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">KOSPI 시총 상위 외국인 수급 검색</div>
+    <div class="note">최근 5거래일 매수강도 순위이며 자동 매수 신호가 아닙니다.</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>종목</th><th>코드</th><th>기준일</th><th>5일 매수강도</th><th>당일 매수강도</th><th>순매수일</th><th>보유율</th><th>보유율 변화</th><th>기관 5일</th><th>개인 5일</th></tr></thead>
+      <tbody id="scanner-body"></tbody>
+    </table></div>
+  </div>
+
+  <div class="footer">기존 KOSPI 돈치안20 대시보드와 독립적으로 생성됩니다.</div>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+const DATA = __PAYLOAD__;
+const pct = v => v == null ? '—' : `${(Number(v)*100).toFixed(2)}%`;
+const num = (v,d=2) => v == null ? '—' : Number(v).toLocaleString('ko-KR',{maximumFractionDigits:d});
+const cls = v => Number(v) > 0 ? 'green' : Number(v) < 0 ? 'red' : '';
+const date = v => v ? String(v).slice(0,10) : '—';
+document.getElementById('updated').textContent = `생성: ${DATA.generated_at} · 왕복비용 기준 ${DATA.cost_bps}bp · 차트 종목 ${DATA.focus_ticker}`;
+
+const latest = document.getElementById('latest');
+DATA.latest.forEach(x => latest.innerHTML += `
+  <div class="card"><div class="label">${x.ticker} · ${date(x.date)}</div>
+    <div class="value">${num(x.close,0)}</div>
+    <div class="sub">돈치안 국면: ${x.donchian_position ? '보유' : '현금'}</div></div>
+  <div class="card"><div class="label">${x.ticker} 외국인 5일</div>
+    <div class="value ${cls(x.foreign_flow_5d)}">${pct(x.foreign_flow_5d)}</div>
+    <div class="sub">5일 중 ${num(x.foreign_positive_days_5d,0)}일 순매수 · 신호 ${x.foreign_signal ? 'ON' : 'OFF'}</div></div>
+  <div class="card"><div class="label">${x.ticker} 외국인 보유율</div>
+    <div class="value">${num(x.foreign_holding_pct)}%</div>
+    <div class="sub ${cls(x.foreign_holding_change_5d)}">5일 변화 ${num(x.foreign_holding_change_5d)}%p</div></div>
+  <div class="card"><div class="label">원/달러</div>
+    <div class="value">${num(x.usdkrw_close)}</div>
+    <div class="sub ${cls(-Number(x.usdkrw_return_5d))}">5일 변화 ${pct(x.usdkrw_return_5d)}</div></div>`);
+
+new Chart(document.getElementById('flowChart'), {
+  data:{labels:DATA.chart.map(x=>date(x.date).slice(5)),datasets:[
+    {type:'line',label:'종가',data:DATA.chart.map(x=>x.close),borderColor:'#4d8cff',pointRadius:0,yAxisID:'price'},
+    {type:'bar',label:'외국인 5일 매수강도',data:DATA.chart.map(x=>Number(x.foreign_flow_5d)*100),
+      backgroundColor:DATA.chart.map(x=>Number(x.foreign_flow_5d)>=0?'rgba(0,210,141,.55)':'rgba(255,85,119,.55)'),yAxisID:'flow'}
+  ]},
+  options:{responsive:true,maintainAspectRatio:false,animation:false,interaction:{mode:'index',intersect:false},
+    plugins:{legend:{labels:{color:'#9999bb'}}},scales:{
+      x:{ticks:{color:'#9999bb',maxTicksLimit:12},grid:{color:'rgba(255,255,255,.04)'}},
+      price:{position:'left',ticks:{color:'#9999bb'},grid:{color:'rgba(255,255,255,.04)'}},
+      flow:{position:'right',ticks:{color:'#9999bb',callback:v=>v+'%'},grid:{display:false}}
+    }}
+});
+
+function makeTabs(id, values, initial, render) {
+  const root=document.getElementById(id);root.setAttribute('role','tablist');
+  values.forEach(v=>{const b=document.createElement('button');b.type='button';b.setAttribute('role','tab');b.textContent=v.label;b.onclick=()=>{
+    [...root.children].forEach(x=>{x.classList.remove('active');x.setAttribute('aria-selected','false');});
+    b.classList.add('active');b.setAttribute('aria-selected','true');render(v.value);
+  };root.appendChild(b);const selected=v.value===initial;b.setAttribute('aria-selected',String(selected));if(selected){b.classList.add('active');}});render(initial);
+}
+function renderStrategies(multiplier) {
+  const body=document.getElementById('strategy-body');body.innerHTML='';
+  DATA.strategies.filter(x=>Number(x.cost_multiplier)===multiplier).forEach(x=>body.innerHTML+=`<tr>
+    <td>${x.ticker}</td><td><span class="badge">${x.strategy}</span></td>
+    <td class="${cls(x.total_return)}">${pct(x.total_return)}</td><td>${pct(x.cagr)}</td><td class="red">${pct(x.mdd)}</td>
+    <td>${num(x.sharpe)}</td><td>${num(x.active_days,0)}</td><td>${pct(x.win_rate)}</td>
+    <td>${pct(x.avg_active_return)}</td><td class="red">${pct(x.cvar_95)}</td><td>${num(x.max_losing_streak,0)}</td></tr>`);
+}
+makeTabs('cost-tabs',[{label:'비용 1배',value:1},{label:'비용 1.5배',value:1.5},{label:'비용 2배',value:2}],1,renderStrategies);
+
+function renderConditions(horizon) {
+  const body=document.getElementById('condition-body');body.innerHTML='';
+  DATA.conditions.filter(x=>Number(x.horizon_days)===horizon).forEach(x=>body.innerHTML+=`<tr>
+    <td>${x.ticker}</td><td>${x.condition}</td><td>${num(x.samples,0)}</td>
+    <td class="${cls(x.average_return)}">${pct(x.average_return)}</td>
+    <td class="${cls(x.excess_vs_all)}">${pct(x.excess_vs_all)}</td>
+    <td class="${Number(x.fdr_q_value)<.05&&Number(x.ci_95_low)>0?'green':Number(x.fdr_q_value)<.05&&Number(x.ci_95_high)<0?'red':''}">${pct(x.ci_95_low)} ~ ${pct(x.ci_95_high)}</td>
+    <td>${num(x.bootstrap_p_value,3)}</td><td>${num(x.fdr_q_value,3)}</td><td>${pct(x.win_rate)}</td></tr>`);
+}
+makeTabs('horizon-tabs',[1,3,5,10,20].map(v=>({label:`${v}일 후`,value:v})),5,renderConditions);
+
+const quantileBody=document.getElementById('quantile-body');
+DATA.quantiles.filter(x=>Number(x.horizon_days)===5).forEach(x=>quantileBody.innerHTML+=`<tr>
+  <td>${x.ticker}</td><td>${num(x.foreign_flow_quantile,0)}분위</td><td>5일</td><td>${num(x.samples,0)}</td>
+  <td class="${cls(x.average_return)}">${pct(x.average_return)}</td><td>${pct(x.median_return)}</td><td>${pct(x.win_rate)}</td></tr>`);
+
+const featureNames={foreign_flow_1d:'외국인 당일 매수강도',foreign_flow_5d:'외국인 5일 매수강도',foreign_flow_20d:'외국인 20일 매수강도',foreign_positive_days_5d:'외국인 5일 순매수일',foreign_holding_change_5d:'외국인 보유율 변화',institution_flow_5d:'기관 5일 매수강도',price_return_1d:'당일 수익률',volume_ratio_20d:'20일 거래량 비율',usdkrw_return_1d:'원달러 당일 변화',usdkrw_return_5d:'원달러 5일 변화'};
+const correlationBody=document.getElementById('correlation-body');
+DATA.correlations.filter(x=>Number(x.horizon_days)===5).sort((a,b)=>Math.abs(Number(b.spearman))-Math.abs(Number(a.spearman))).forEach(x=>correlationBody.innerHTML+=`<tr>
+  <td>${x.ticker}</td><td>${featureNames[x.feature]||x.feature}</td><td>${num(x.samples,0)}</td>
+  <td class="${cls(x.pearson)}">${num(x.pearson,3)}</td><td class="${cls(x.spearman)}">${num(x.spearman,3)}</td></tr>`);
+
+const scannerBody=document.getElementById('scanner-body');
+if(!DATA.scanner.length) scannerBody.innerHTML='<tr><td colspan="10" style="text-align:center;color:var(--dim)">검색 생략 또는 데이터 없음</td></tr>';
+DATA.scanner.forEach(x=>scannerBody.innerHTML+=`<tr><td>${x.name}</td><td>${x.ticker}</td><td>${date(x.date)}</td>
+  <td class="${cls(x.foreign_flow_5d)}">${pct(x.foreign_flow_5d)}</td><td class="${cls(x.foreign_flow_1d)}">${pct(x.foreign_flow_1d)}</td>
+  <td>${num(x.foreign_positive_days_5d,0)}/5</td><td>${num(x.foreign_holding_pct)}%</td><td class="${cls(x.foreign_holding_change_5d)}">${num(x.foreign_holding_change_5d)}%p</td>
+  <td class="${cls(x.institution_flow_5d)}">${pct(x.institution_flow_5d)}</td><td class="${cls(x.individual_flow_5d)}">${pct(x.individual_flow_5d)}</td></tr>`);
+</script>
+</body>
+</html>
