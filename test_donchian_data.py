@@ -19,6 +19,57 @@ def sample_ohlc(periods=61):
     }, index=index, dtype=float)
 
 
+def sample_ftd_entry():
+    drop_days = 80
+    rally = [2010, 2020, 2030, 2100]
+    index = pd.bdate_range('2025-01-01', periods=drop_days + len(rally))
+    close = list(np.linspace(3000, 2000, drop_days)) + rally
+    data = pd.DataFrame({'close': close}, index=index)
+    data['open'] = data['close']
+    data['high'] = data['close'] * 1.005
+    data['low'] = data['close'] * 0.995
+    data['volume'] = [1000.0] * drop_days + [900, 900, 900, 3000]
+    return data
+
+
+class CombinedEntrySignalTest(unittest.TestCase):
+    def test_ftd_entry_emits_buy_with_ftd_source(self):
+        data = app.compute_signals(sample_ftd_entry())
+        last = data.iloc[-1]
+
+        self.assertFalse(last['long_entry'])
+        self.assertTrue(last['ftd_entry'])
+        self.assertEqual(last['position'], 1)
+        self.assertEqual(last['entry_source'], 'FTD')
+
+        with TemporaryDirectory() as tmp:
+            with patch.object(app, 'OUT_DIR', Path(tmp)):
+                signals = app.update_signal_log(data)
+
+        signal = signals.iloc[-1]
+        self.assertEqual(signal['type'], 'BUY')
+        self.assertEqual(signal['source'], 'FTD')
+        payload = app._build_supabase_payload(data, signals)
+        self.assertNotIn('last_signal_source', payload)
+        self.assertTrue(payload['chart'][-1]['ftd_confirmed'])
+        self.assertEqual(payload['chart'][-1]['entry_source'], 'FTD')
+
+    def test_donchian_entry_keeps_its_own_source(self):
+        data = app.compute_signals(sample_ohlc())
+        entries = data[data['entry_source'].notna()]
+
+        self.assertFalse(entries.empty)
+        self.assertTrue((entries['entry_source'] == 'DONCHIAN').all())
+
+    @patch.object(app, 'track_scenarios', return_value=[])
+    def test_ftd_buy_message_names_ftd_conditions(self, _track):
+        data = app.compute_signals(sample_ftd_entry())
+        message = app.build_message(data, signal_today='BUY')
+
+        self.assertIn('[FTD 매수 조건 충족]', message)
+        self.assertIn('다음 거래일 시가 매수', message)
+
+
 class MarketDataValidationTest(unittest.TestCase):
     def test_verified_history_replaces_stale_recent_value(self):
         verified = sample_ohlc()
