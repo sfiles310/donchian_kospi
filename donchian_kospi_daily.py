@@ -341,27 +341,47 @@ def fetch_kospi_data(days: int = 400) -> pd.DataFrame:
 def compute_signals(df: pd.DataFrame,
                     n_entry: int = 20,
                     n_exit: int = 20) -> pd.DataFrame:
-    """돈치안 20일 채널 신호 + 포지션 시뮬레이션"""
+    """돈치안 20일 채널 또는 FTD 진입 + 돈치안 청산 포지션 시뮬레이션."""
     d = df.copy()
     # shift(1): 룩어헤드 방지 — 어제까지의 채널로 오늘 신호 판단
     d['dc_high'] = d['high'].rolling(n_entry).max().shift(1)
     d['dc_low']  = d['low'].rolling(n_exit).min().shift(1)
     d['long_entry'] = d['high'] > d['dc_high']
     d['long_exit']  = d['low']  < d['dc_low']
+    ftd = ftd_signal.compute_ftd(d)
+    d['ftd_entry'] = ftd['ftd']
+    d['ftd_in_correction'] = ftd['in_correction']
+    d['ftd_rally_day'] = ftd['rally_day']
+    d['ftd_gain'] = ftd['gain']
+    d['ftd_volume_ratio'] = ftd['volume_ratio']
+    d['ftd_in_window'] = ftd['in_window']
+    d['ftd_gain_ok'] = ftd['gain_ok']
+    d['ftd_volume_ok'] = ftd['volume_ok']
 
-    # 포지션 시뮬레이션
+    # 두 진입 조건은 독립적으로 판정한다. 둘 중 먼저 충족하면 보유로 전환하고,
+    # 보유 중에는 중복 매수하지 않으며 청산은 돈치안 하단 이탈만 사용한다.
     pos = 0
     positions = []
+    entry_sources = []
     for i in range(len(d)):
         if pd.isna(d['dc_high'].iloc[i]):
             positions.append(0)
+            entry_sources.append(None)
             continue
-        if pos == 0 and d['long_entry'].iloc[i]:
-            pos = 1
+        source = None
+        if pos == 0:
+            dc_hit = bool(d['long_entry'].iloc[i])
+            ftd_hit = bool(d['ftd_entry'].iloc[i])
+            if dc_hit or ftd_hit:
+                pos = 1
+                source = ('DONCHIAN+FTD' if dc_hit and ftd_hit
+                          else 'DONCHIAN' if dc_hit else 'FTD')
         elif pos == 1 and d['long_exit'].iloc[i]:
             pos = 0
         positions.append(pos)
+        entry_sources.append(source)
     d['position'] = positions
+    d['entry_source'] = entry_sources
     return d
 
 # ─────────────────────────────────────────────────────────────────
@@ -379,6 +399,7 @@ def update_signal_log(d: pd.DataFrame) -> pd.DataFrame:
             new_signals.append({
                 'date': d.index[i].strftime('%Y-%m-%d'),
                 'type': 'BUY',
+                'source': d['entry_source'].iloc[i],
                 'price': float(d['close'].iloc[i]),
                 'dc_high': float(d['dc_high'].iloc[i]),
                 'dc_low':  float(d['dc_low'].iloc[i]),
@@ -387,6 +408,7 @@ def update_signal_log(d: pd.DataFrame) -> pd.DataFrame:
             new_signals.append({
                 'date': d.index[i].strftime('%Y-%m-%d'),
                 'type': 'SELL',
+                'source': 'DONCHIAN',
                 'price': float(d['close'].iloc[i]),
                 'dc_high': float(d['dc_high'].iloc[i]),
                 'dc_low':  float(d['dc_low'].iloc[i]),
@@ -437,6 +459,17 @@ def _build_supabase_payload(d: pd.DataFrame, signals: pd.DataFrame) -> dict:
         'dc_high':  round(float(row['dc_high']), 2),
         'dc_low':   round(float(row['dc_low']),  2),
         'position': int(row['position']),
+        'entry_source': (row['entry_source'] if pd.notna(row['entry_source']) else None),
+        'ftd_in_correction': bool(row['ftd_in_correction']),
+        'ftd_rally_day': int(row['ftd_rally_day']),
+        'ftd_gain': (round(float(row['ftd_gain']), 3)
+                     if pd.notna(row['ftd_gain']) else None),
+        'ftd_volume_ratio': (round(float(row['ftd_volume_ratio']), 3)
+                             if pd.notna(row['ftd_volume_ratio']) else None),
+        'ftd_in_window': bool(row['ftd_in_window']),
+        'ftd_gain_ok': bool(row['ftd_gain_ok']),
+        'ftd_volume_ok': bool(row['ftd_volume_ok']),
+        'ftd_confirmed': bool(row['ftd_entry']),
     } for idx, row in plot_df.iterrows()]
 
     last = d.iloc[-1]
@@ -739,6 +772,7 @@ def build_message(d: pd.DataFrame, signal_today: str, prices: dict = None) -> st
     pos = int(last['position'])
     entry_hit = bool(last['long_entry'])
     exit_hit  = bool(last['long_exit'])
+    entry_source = str(last.get('entry_source') or '')
 
     # 국면이 유지된 거래일 수
     chg = d['position'].diff()
@@ -750,10 +784,21 @@ def build_message(d: pd.DataFrame, signal_today: str, prices: dict = None) -> st
     md = d.index[-1].strftime('%m/%d')
 
     # ── 머리말: 오늘 할 행동 ──────────────────────────────────
-    if exit_hit:
+    if signal_today == 'SELL':
         head = (f"<b>[매도 조건 충족] {md}</b>\n"
                 f"저가 {low:,.0f} &lt; 20일 하단 {dcl:,.0f}\n\n"
                 "다음 거래일 시가 매도\n" + _fmt_holdings(prices))
+    elif signal_today == 'BUY' and entry_source == 'FTD':
+        head = (f"<b>[FTD 매수 조건 충족] {md}</b>\n"
+                f"랠리 {int(last['ftd_rally_day'])}일차 · 상승 {last['ftd_gain']:+.2f}%\n"
+                f"거래량 {last['ftd_volume_ratio']:.2f}배 &gt; 50일 평균\n\n"
+                "다음 거래일 시가 매수\n" + _fmt_holdings(prices))
+    elif signal_today == 'BUY' and entry_source == 'DONCHIAN+FTD':
+        head = (f"<b>[돈치안+FTD 매수 조건 동시 충족] {md}</b>\n"
+                f"고가 {high:,.0f} &gt; 20일 상단 {dch:,.0f}\n"
+                f"랠리 {int(last['ftd_rally_day'])}일차 · 상승 {last['ftd_gain']:+.2f}%"
+                f" · 거래량 {last['ftd_volume_ratio']:.2f}배\n\n"
+                "다음 거래일 시가 매수\n" + _fmt_holdings(prices))
     elif entry_hit:
         head = (f"<b>[매수 조건 충족] {md}</b>\n"
                 f"고가 {high:,.0f} &gt; 20일 상단 {dch:,.0f}\n\n"
@@ -832,7 +877,7 @@ def render_ftd_page(d: pd.DataFrame) -> Path:
     frame = frame.join(table[['in_correction', 'rally_day', 'rally_low', 'gain',
                               'volume_ratio', 'in_window', 'gain_ok',
                               'volume_ok', 'ftd']])
-    frame['dc_buy'] = frame['position'].diff() == 1
+    frame['dc_buy'] = frame['entry_source'].isin(['DONCHIAN', 'DONCHIAN+FTD'])
     frame['dc_sell'] = frame['position'].diff() == -1
 
     def clean(value, digits=2):
@@ -857,6 +902,8 @@ def render_ftd_page(d: pd.DataFrame) -> Path:
             'gain_ok': bool(row['gain_ok']),
             'volume_ok': bool(row['volume_ok']),
             'ftd': bool(row['ftd']),
+            'entry_source': row['entry_source'] if pd.notna(row['entry_source']) else None,
+            'dc_condition': bool(row['long_entry']),
             'dc_buy': bool(row['dc_buy']), 'dc_sell': bool(row['dc_sell']),
         })
 
@@ -865,9 +912,11 @@ def render_ftd_page(d: pd.DataFrame) -> Path:
     for i, row in enumerate(rows):
         if not row['ftd']:
             continue
-        later = next((j for j in range(i + 1, len(rows)) if rows[j]['dc_buy']), None)
+        later = next((j for j in range(i + 1, len(rows)) if rows[j]['dc_condition']), None)
         held = bool(frame['position'].iloc[i] == 1)
-        if held:
+        if row['entry_source'] in ('FTD', 'DONCHIAN+FTD'):
+            note, lag, edge = 'FTD 매수 신호 발생', None, None
+        elif held:
             note, lag, edge = '이미 보유 중 (효과 없음)', None, None
         elif later is not None:
             lag = later - i
