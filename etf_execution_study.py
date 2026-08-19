@@ -5,9 +5,9 @@
 가격지수**다. 핸드오프의 '남은 결함' 첫 줄이 이것이다. 이 스크립트는 세 가지를
 분리해서 잰다.
 
-1. 배당    — 가격형 ETF(069500)와 배당 재투자형(278530 TR)의 차이
-2. 추적    — 지수와 ETF의 차이 (보수·추적오차)
-3. 체결    — 지수 시가와 ETF 시가의 차이 (동시호가에 실제로 체결되는 값)
+1. 배당    - 가격형 ETF(069500)와 배당 재투자형(278530 TR)의 차이
+2. 추적    - 지수와 ETF의 차이 (보수·추적오차)
+3. 체결    - 지수 시가와 ETF 시가의 차이 (동시호가에 실제로 체결되는 값)
 
 앞의 여덟 검정은 전부 "규칙을 얹어 수익을 올리려는" 시도였고 전부 실패했다.
 이것은 다른 종류의 물음이다. **이미 벌고 있는데 장부에 안 적힌 것이 있는가.**
@@ -113,7 +113,7 @@ def main() -> None:
 
     # ---- 1. 배당이 얼마인가 ------------------------------------------------
     print("\n" + "=" * 78)
-    print("1. 배당 — 가격형과 배당재투자형(TR)의 차이")
+    print("1. 배당 - 가격형과 배당재투자형(TR)의 차이")
     print("=" * 78)
     price = data["KODEX200 가격형"]["Close"]
     tr = data["KODEX200 TR(배당재투자)"]["Close"]
@@ -124,16 +124,16 @@ def main() -> None:
     print(f"  TR형   278530 연환산 {annualized(t):+.2f}%")
     div = annualized(t) - annualized(p)
     print(f"  차이 = 배당 재투자 효과 **연 {div:+.2f}%p**")
-    print("\n  가격형을 들고 있으면 이 배당은 사라지는 것이 아니라 분배금으로 현금에")
-    print("  들어온다. 즉 실제 수익은 069500 가격수익 + 분배금이고, 지금까지의")
-    print("  백테스트는 그 분배금을 통째로 빼고 계산해 왔다.")
+    print("\n  차이가 이만큼 작다는 것은 가격형이 배당을 분배하지 않고 NAV에 남긴다는")
+    print("  뜻이다. 실제로 4월 분배 기준일 근처에 가격 하락이 없다(월별 평균 4월")
+    print("  -0.002%p). 그러므로 배당 몫은 TR과의 차이가 아니라 지수와의 차이로 잰다.")
 
     # ---- 1b. 한 종목의 자료 문제가 아닌지 교차검증 --------------------------
     # 069500 하나만 보고 결론을 내면 그 종목의 수정주가 처리 방식에 속을 수 있다.
     # 같은 지수를 추종하는 다른 운용사 ETF들과, 지수 선택이 섞이지 않도록
     # 코스피 자체를 추종하는 ETF까지 같이 본다.
     print("\n" + "-" * 78)
-    print("교차검증 — 한 종목의 자료 처리 문제가 아닌가")
+    print("교차검증 - 한 종목의 자료 처리 문제가 아닌가")
     print("-" * 78)
     ks200_c = data["KS200 지수"]["Close"]
     cross = []
@@ -170,7 +170,7 @@ def main() -> None:
 
     # ---- 2. 지수와 ETF의 차이 ----------------------------------------------
     print("\n" + "=" * 78)
-    print("2. 추적 — 지수와 ETF가 얼마나 다른가")
+    print("2. 추적 - 지수와 ETF가 얼마나 다른가")
     print("=" * 78)
     ks200 = data["KS200 지수"]["Close"]
     idx = price.index.intersection(ks200.index)
@@ -184,9 +184,9 @@ def main() -> None:
     print(f"  일간수익 상관 {r_i.corr(r_e):.4f}, "
           f"추적오차(차이 표준편차 연환산) {(r_e - r_i).std() * np.sqrt(252) * 100:.2f}%")
 
-    # ---- 3. 체결 — 시가가 실제로 다른가 ------------------------------------
+    # ---- 3. 체결 - 시가가 실제로 다른가 ------------------------------------
     print("\n" + "=" * 78)
-    print("3. 체결 — 지수 시가와 ETF 시가")
+    print("3. 체결 - 지수 시가와 ETF 시가")
     print("=" * 78)
     gap_i = (data["KS200 지수"]["Open"] / data["KS200 지수"]["Close"].shift(1) - 1) * 100
     gap_e = (data["KODEX200 가격형"]["Open"]
@@ -219,17 +219,17 @@ def main() -> None:
     print(f"    ETF - KS200  = {bh_etf - bh_ks200:+.2f}%p  (배당이 ETF 가격에 남는다)\n")
 
     rows = []
-    # (a) 신호도 체결도 KS11 — 지금까지 해 온 것
+    # (a) 신호도 체결도 KS11 - 지금까지 해 온 것
     pos = donchian(ks11["High"], ks11["Low"]).loc[span]
     d, h = run(pos, ks11["Open"].loc[span])
     rows.append(stats(d, h, "(a) KS11 신호 / KS11 체결  [현행 기준]"))
-    # (a2) 체결만 KS200으로 — 지수 선택 차이만 분리한다
+    # (a2) 체결만 KS200으로 - 지수 선택 차이만 분리한다
     d, h = run(pos, data["KS200 지수"]["Open"].loc[span])
     rows.append(stats(d, h, "(a2) KS11 신호 / KS200 체결  [지수만 교체]"))
-    # (b) 신호는 KS11, 체결은 ETF — 지수를 보고 ETF를 산다. 실제 운용 모습이다
+    # (b) 신호는 KS11, 체결은 ETF - 지수를 보고 ETF를 산다. 실제 운용 모습이다
     d, h = run(pos, etf["Open"].loc[span])
     rows.append(stats(d, h, "(b) KS11 신호 / ETF 체결  [배당 포함]"))
-    # (c) 신호도 체결도 ETF — ETF만 보고 판단한다
+    # (c) 신호도 체결도 ETF - ETF만 보고 판단한다
     pos_e = donchian(etf["High"], etf["Low"]).loc[span]
     d, h = run(pos_e, etf["Open"].loc[span])
     rows.append(stats(d, h, "(c) ETF 신호 / ETF 체결"))
@@ -261,7 +261,7 @@ def main() -> None:
     print(clean.to_string(index=False))
     print(f"  ΔCAGR {clean.iloc[1]['CAGR%'] - clean.iloc[0]['CAGR%']:+.2f}%p, "
           f"ΔMDD {clean.iloc[1]['MDD%'] - clean.iloc[0]['MDD%']:+.2f}%p"
-          "  — 규칙은 한 글자도 안 바뀌었다")
+          "  - 규칙은 한 글자도 안 바뀌었다")
 
     base = table.iloc[0]
     final = table.iloc[-1]

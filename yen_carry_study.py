@@ -194,7 +194,7 @@ def main() -> None:
     fx = load_fx(kospi.index)
     jpy = fx["USDJPY"]
     first = jpy.first_valid_index()
-    print(f"  USD/JPY 유효 시작 {first.date()} — 1995~1996은 표본 밖이다")
+    print(f"  USD/JPY 유효 시작 {first.date()} - 1995~1996은 표본 밖이다")
     print(f"  결측: " + ", ".join(f"{c} {int(fx[c].isna().sum())}일" for c in fx))
 
     # 정렬 뒤에 변화율을 계산한다. 원본 캘린더에는 주말 라벨이 섞여 있다

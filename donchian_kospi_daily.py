@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-KOSPI 돈치안 20일 채널 전략 — 매일 자동 신호 생성기
+KOSPI 돈치안 20일 채널 전략 - 매일 자동 신호 생성기
 ─────────────────────────────────────────────────────
 실행 시 동작:
   1) pykrx로 코스피 지수 OHLCV 최신 데이터 수집
@@ -54,13 +54,13 @@ CONFIG = {
         ('0167A0', 'SOL AI반도체TOP2+'),
         ('292150', 'TIGER 코리아TOP10'),
     ],
-    # 지수 신호 미적용 — 참고 표시만 (상관 0.71, 표본 부족)
+    # 지수 신호 미적용 - 참고 표시만 (상관 0.71, 표본 부족)
     'REFERENCE': [
         ('0190C0', 'RISE 현대차그룹피지컬AI', '상관 0.71 · 재판정 2026-11'),
     ],
 
     # 전략 검증 기준일. 각 기준일마다 '신호대로 실행' vs '계속 보유'를 비교한다.
-    # 금액은 넣지 않는다 — 공개 저장소라 수량이 드러나면 자산 규모가 계산된다.
+    # 금액은 넣지 않는다 - 공개 저장소라 수량이 드러나면 자산 규모가 계산된다.
     'TRACK': [
         ('2026-07-03', '미실행'),   # 놓친 매도 신호. 이미 치른 비용
         ('2026-07-21', '검증'),     # 이제부터 신호대로 할 경우의 검증
@@ -343,7 +343,7 @@ def compute_signals(df: pd.DataFrame,
                     n_exit: int = 20) -> pd.DataFrame:
     """돈치안 20일 채널 또는 FTD 진입 + 돈치안 청산 포지션 시뮬레이션."""
     d = df.copy()
-    # shift(1): 룩어헤드 방지 — 어제까지의 채널로 오늘 신호 판단
+    # shift(1): 룩어헤드 방지 - 어제까지의 채널로 오늘 신호 판단
     d['dc_high'] = d['high'].rolling(n_entry).max().shift(1)
     d['dc_low']  = d['low'].rolling(n_exit).min().shift(1)
     d['long_entry'] = d['high'] > d['dc_high']
@@ -420,7 +420,7 @@ def update_signal_log(d: pd.DataFrame) -> pd.DataFrame:
     return new_df
 
 # ─────────────────────────────────────────────────────────────────
-# Supabase 발행 — 앱(strategy_signal)이 읽는 최신 스냅샷 upsert
+# Supabase 발행 - 앱(strategy_signal)이 읽는 최신 스냅샷 upsert
 # ─────────────────────────────────────────────────────────────────
 def notification_completed(as_of_date: str) -> bool:
     """Supabase에 같은 지수 기준일이 발행됐으면 중복 알림을 막는다."""
@@ -563,7 +563,7 @@ def send_telegram(text: str) -> bool:
                 desc = r.json().get('description', '')
             except Exception:
                 desc = r.text[:200]
-            log.error(f"텔레그램 푸시 실패: HTTP {r.status_code} — {_redact(desc)}")
+            log.error(f"텔레그램 푸시 실패: HTTP {r.status_code} - {_redact(desc)}")
             return False
         log.info("텔레그램 푸시 성공")
         return True
@@ -654,8 +654,8 @@ def project_dc_high(d: pd.DataFrame, n: int = 20, steps=(4, 8, 12, 16, 20)):
 def track_scenarios(d: pd.DataFrame, start: str) -> list:
     """기준일(start) 이후 두 경로를 비교.
 
-      A. 신호 준수  — 지수 신호대로 매도/매수. 체결은 신호 다음 거래일 시가.
-      B. 계속 보유  — 팔지 않고 그대로 들고 감.
+      A. 신호 준수  - 지수 신호대로 매도/매수. 체결은 신호 다음 거래일 시가.
+      B. 계속 보유  - 팔지 않고 그대로 들고 감.
 
     두 경로 모두 시장 가격만으로 계산된다. 실제 매매 여부와 무관하게 값이 나오고,
     사용자는 자기가 어느 선 위에 있는지만 알면 된다.
@@ -1027,7 +1027,7 @@ else:
 # ─────────────────────────────────────────────────────────────────
 def main(force_notification: bool = False):
     log.info("=" * 60)
-    log.info("KOSPI Donchian 20 Daily Signal — START")
+    log.info("KOSPI Donchian 20 Daily Signal - START")
     log.info("=" * 60)
 
     if not HTML_TEMPLATE:
@@ -1059,7 +1059,7 @@ def main(force_notification: bool = False):
     except Exception as exc:  # noqa: BLE001 - 화면 실패가 알림을 막으면 안 된다
         log.warning(f"FTD 화면 생성 실패: {exc}")
 
-    # 6. 텔레그램 푸시 — 조건 충족일 또는 NOTIFY_ALWAYS=True
+    # 6. 텔레그램 푸시 - 조건 충족일 또는 NOTIFY_ALWAYS=True
     prices = fetch_prices(CONFIG['MANAGED'] + CONFIG['REFERENCE'], last_date)
     msg = build_message(d, signal_today, prices)
     if force_notification:
@@ -1076,7 +1076,7 @@ def main(force_notification: bool = False):
     last = d.iloc[-1]
     cond_hit = bool(last['long_entry']) or bool(last['long_exit'])
     if cond_hit:
-        log.info(f"조건 충족일 — {'매수' if last['long_entry'] else '매도'} 조건 TRUE")
+        log.info(f"조건 충족일 - {'매수' if last['long_entry'] else '매도'} 조건 TRUE")
 
     notify_due = bool(force_notification or signal_today or cond_hit
                       or CONFIG['NOTIFY_ALWAYS'])

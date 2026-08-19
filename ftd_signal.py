@@ -146,7 +146,7 @@ def format_alert_block(state: FtdState, dc_high: float, close: float) -> str:
         return "\n".join(lines)
 
     if state.confirmed:
-        lines.append(f"✅ FTD 확정 — 상승 {state.gain:+.2f}% · "
+        lines.append(f"✅ FTD 확정 - 상승 {state.gain:+.2f}% · "
                      f"거래량 {state.volume_ratio:.2f}배")
         lines.append("돈치안 상단 전이라도 조기 재진입 검토")
         return "\n".join(lines)
