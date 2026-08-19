@@ -38,6 +38,7 @@ GitHub Actions는 이 키를 쓰지 않습니다.
 | `data/kospi_index_history.csv` | 지수 거래량 이력. FTD 판정에 필요 |
 | `refresh_index_history.py` | 위 이력 갱신 (로컬 전용, 몇 달에 한 번) |
 | `foreign_flow_validation.py` | 외국인 수급·환율 비교 검증 스크립트 |
+| `us_index_study.py` | 돈치안·FTD 결합 규칙을 S&P500·나스닥100에서 검정 (로컬 전용) |
 | `foreign_flow_dashboard_template.html` | 외국인 수급 검증 대시보드 템플릿 |
 | `run_donchian.bat` | 윈도우 자동 실행용 배치 파일 |
 | `requirements.txt` | 필요한 라이브러리 목록 |
